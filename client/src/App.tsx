@@ -5,6 +5,7 @@ import { ChannelsManager } from './pages/admin/ChannelsManager';
 import { ScheduleGrid } from './pages/admin/ScheduleGrid';
 import { MediaServers } from './pages/admin/MediaServers';
 import { MediaLibrary } from './pages/admin/MediaLibrary';
+import { SetupGuide } from './pages/admin/SetupGuide';
 import { TVPlayer } from './pages/tv/TVPlayer';
 
 export const App: React.FC = () => {
@@ -36,6 +37,7 @@ export const App: React.FC = () => {
           <Dashboard
             onSelectChannel={ch => handleLaunchTV(ch.number)}
             onLaunchTV={handleLaunchTV}
+            onOpenGuide={() => setCurrentTab('guide')}
           />
         )}
         {currentTab === 'channels' && (
@@ -44,6 +46,7 @@ export const App: React.FC = () => {
         {currentTab === 'schedule' && <ScheduleGrid />}
         {currentTab === 'servers' && <MediaServers />}
         {currentTab === 'media' && <MediaLibrary />}
+        {currentTab === 'guide' && <SetupGuide onLaunchTV={handleLaunchTV} />}
       </main>
 
       <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-600">

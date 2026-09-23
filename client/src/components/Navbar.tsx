@@ -1,5 +1,5 @@
 import React from 'react';
-import { Tv, Sliders, Calendar, Database, PlaySquare, Radio } from 'lucide-react';
+import { Tv, Sliders, Calendar, Database, PlaySquare, Radio, HelpCircle } from 'lucide-react';
 
 interface NavbarProps {
   currentTab: string;
@@ -13,6 +13,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
     { id: 'schedule', label: 'EPG Schedule', icon: Calendar },
     { id: 'servers', label: 'Media Servers', icon: Database },
     { id: 'media', label: 'Movie Library', icon: Sliders },
+    { id: 'guide', label: 'Setup Guide', icon: HelpCircle },
   ];
 
   return (

@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Radio, Film, Clock, Server, Copy, Check, ExternalLink, Play, Sparkles } from 'lucide-react';
+import { Radio, Film, Clock, Server, Copy, Check, ExternalLink, Play, Sparkles, HelpCircle } from 'lucide-react';
 import { Channel } from '../../types';
 
 interface DashboardProps {
   onSelectChannel: (channel: Channel) => void;
   onLaunchTV: (channelNumber?: number) => void;
+  onOpenGuide?: () => void;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ onLaunchTV }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ onLaunchTV, onOpenGuide }) => {
   const [stats, setStats] = useState({
     serversCount: 0,
     channelsCount: 0,
@@ -164,11 +165,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLaunchTV }) => {
 
       {/* IPTV Feed Endpoints Card */}
       <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-6 shadow-md">
-        <h2 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-          <span>IPTV & EPG Feed URLs for your TV Clients</span>
-        </h2>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <span>IPTV & EPG Feed URLs for your TV Clients</span>
+          </h2>
+          {onOpenGuide && (
+            <button
+              onClick={onOpenGuide}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-semibold transition-all self-start sm:self-auto"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Jellyfin & Plex Setup Guide</span>
+            </button>
+          )}
+        </div>
         <p className="text-sm text-slate-400 mb-6">
-          Paste these feed URLs into external IPTV players (e.g., TiviMate, OTT Navigator, Kodi IPTV Simple Client, Apple TV IPTVX, or VLC).
+          Paste these feed URLs into external IPTV players (e.g., Jellyfin Live TV, Plex Live TV & DVR, TiviMate, OTT Navigator, Kodi, or VLC).
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
