@@ -30,28 +30,180 @@ router.get('/', async (req, res) => {
       orderBy: { number: 'asc' },
     });
 
-    const enriched = await Promise.all(
-      channels.map(async ch => {
+    const now = new Date();
+    const baseUrl = process.env.BASE_URL || 'http://localhost:8000';
+
+    // Batch fetch all active/current schedules across channels in a single query
+    const currentSchedules = await prisma.programSchedule.findMany({
+      where: {
+        startTime: { lte: now },
+        endTime: { gt: now },
+      },
+      include: {
+        mediaItem: true,
+      },
+    });
+
+    // Batch fetch next schedules
+    const nextSchedules = await prisma.programSchedule.findMany({
+      where: {
+        startTime: { gte: now },
+      },
+      include: {
+        mediaItem: true,
+      },
+      orderBy: { startTime: 'asc' },
+    });
+
+    const currentMap = new Map<string, typeof currentSchedules[0]>();
+    for (const s of currentSchedules) {
+      currentMap.set(s.channelId, s);
+    }
+
+    const nextMap = new Map<string, typeof nextSchedules[0]>();
+    for (const s of nextSchedules) {
+      if (!nextMap.has(s.channelId)) {
+        nextMap.set(s.channelId, s);
+      }
+    }
+
+    const enriched = channels.map(ch => {
+      const current = currentMap.get(ch.id);
+      const next = nextMap.get(ch.id);
+
+      let currentProgram = null;
+      if (current) {
+        const elapsed = Math.max(0, Math.floor((now.getTime() - current.startTime.getTime()) / 1000));
+        const duration = current.duration;
+        const progressPercentage = Math.min(100, Math.round((elapsed / duration) * 100));
+        let genres: string[] = [];
         try {
-          const state = await SchedulerService.getCurrentPlayoutState(ch.id);
-          return {
-            ...ch,
-            currentProgram: state.currentProgram,
-            nextProgram: state.nextProgram,
-            streamUrl: state.streamUrl,
-          };
+          genres = JSON.parse(current.mediaItem.genres || '[]');
         } catch {
-          return {
-            ...ch,
-            currentProgram: null,
-            nextProgram: null,
-            streamUrl: `${process.env.BASE_URL || 'http://localhost:8000'}/channels/${ch.number}/stream.m3u8`,
-          };
+          genres = [];
         }
-      })
-    );
+
+        currentProgram = {
+          id: current.id,
+          mediaItemId: current.mediaItem.id,
+          title: current.mediaItem.title,
+          type: current.mediaItem.type,
+          seriesName: current.mediaItem.seriesName,
+          seasonNumber: current.mediaItem.seasonNumber,
+          episodeNumber: current.mediaItem.episodeNumber,
+          year: current.mediaItem.year,
+          overview: current.mediaItem.overview,
+          posterUrl: current.mediaItem.posterUrl,
+          backdropUrl: current.mediaItem.backdropUrl,
+          genres,
+          rating: current.mediaItem.rating,
+          contentRating: current.mediaItem.contentRating,
+          startTime: current.startTime.toISOString(),
+          endTime: current.endTime.toISOString(),
+          duration,
+          elapsedSeconds: elapsed,
+          remainingSeconds: Math.max(0, duration - elapsed),
+          progressPercentage,
+        };
+      }
+
+      let nextProgram = null;
+      if (next) {
+        nextProgram = {
+          id: next.id,
+          title: next.mediaItem.title,
+          type: next.mediaItem.type,
+          seriesName: next.mediaItem.seriesName,
+          seasonNumber: next.mediaItem.seasonNumber,
+          episodeNumber: next.mediaItem.episodeNumber,
+          startTime: next.startTime.toISOString(),
+          endTime: next.endTime.toISOString(),
+          duration: next.duration,
+          posterUrl: next.mediaItem.posterUrl,
+        };
+      }
+
+      return {
+        ...ch,
+        currentProgram,
+        nextProgram,
+        streamUrl: `${baseUrl}/channels/${ch.number}/stream.m3u8`,
+      };
+    });
 
     res.json(enriched);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/channels/guide - Full timeline schedule for EPG Grid (3-4 hour window)
+router.get('/guide', async (req, res) => {
+  try {
+    const hours = Math.min(12, Math.max(1, parseInt(req.query.hours as string, 10) || 4));
+    const now = new Date();
+    const startTime = new Date(now.getTime() - 30 * 60 * 1000); // 30 mins in past
+    const endTime = new Date(now.getTime() + hours * 60 * 60 * 1000);
+
+    const channels = await prisma.channel.findMany({
+      where: { enabled: true },
+      orderBy: { number: 'asc' },
+    });
+
+    const schedules = await prisma.programSchedule.findMany({
+      where: {
+        startTime: { lt: endTime },
+        endTime: { gt: startTime },
+      },
+      include: {
+        mediaItem: true,
+      },
+      orderBy: { startTime: 'asc' },
+    });
+
+    const scheduleByChannel = new Map<string, any[]>();
+    for (const prog of schedules) {
+      if (!scheduleByChannel.has(prog.channelId)) {
+        scheduleByChannel.set(prog.channelId, []);
+      }
+      let genres: string[] = [];
+      try {
+        genres = JSON.parse(prog.mediaItem.genres || '[]');
+      } catch {
+        genres = [];
+      }
+
+      scheduleByChannel.get(prog.channelId)!.push({
+        id: prog.id,
+        channelId: prog.channelId,
+        mediaItemId: prog.mediaItemId,
+        title: prog.mediaItem.title,
+        type: prog.mediaItem.type,
+        seriesName: prog.mediaItem.seriesName,
+        seasonNumber: prog.mediaItem.seasonNumber,
+        episodeNumber: prog.mediaItem.episodeNumber,
+        overview: prog.mediaItem.overview,
+        year: prog.mediaItem.year,
+        rating: prog.mediaItem.rating,
+        contentRating: prog.mediaItem.contentRating,
+        posterUrl: prog.mediaItem.posterUrl,
+        genres,
+        startTime: prog.startTime.toISOString(),
+        endTime: prog.endTime.toISOString(),
+        duration: prog.duration,
+      });
+    }
+
+    const result = channels.map(ch => ({
+      channel: ch,
+      programs: scheduleByChannel.get(ch.id) || [],
+    }));
+
+    res.json({
+      windowStart: startTime.toISOString(),
+      windowEnd: endTime.toISOString(),
+      channels: result,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

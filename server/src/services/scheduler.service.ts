@@ -317,8 +317,17 @@ export class SchedulerService {
       throw new Error(`Channel ${channelId} not found`);
     }
 
-    // Ensure we have active schedules
-    await this.ensureSchedule(channelId, 24);
+    // Ensure we have active schedules only if none exist in the future
+    const upcomingCount = await prisma.programSchedule.count({
+      where: {
+        channelId,
+        endTime: { gt: timestamp },
+      },
+    });
+
+    if (upcomingCount === 0) {
+      await this.ensureSchedule(channelId, 24);
+    }
 
     const currentSchedule = await prisma.programSchedule.findFirst({
       where: {

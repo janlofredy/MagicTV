@@ -1,11 +1,36 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Channel } from '../../types';
+import { Channel } from '../../types.js';
 import Hls from 'hls.js';
-import { ArrowLeft, Tv } from 'lucide-react';
+import { ArrowLeft, Tv, Clock, Radio, Sparkles } from 'lucide-react';
 
 interface TVPlayerProps {
   initialChannelNumber?: number;
   onExit: () => void;
+}
+
+interface GuideProgramItem {
+  id: string;
+  channelId: string;
+  mediaItemId: string;
+  title: string;
+  type?: 'movie' | 'episode';
+  seriesName?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+  overview?: string | null;
+  year?: number | null;
+  rating?: number | null;
+  contentRating?: string | null;
+  posterUrl?: string | null;
+  genres: string[];
+  startTime: string;
+  endTime: string;
+  duration: number;
+}
+
+interface GuideChannelData {
+  channel: Channel;
+  programs: GuideProgramItem[];
 }
 
 export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, onExit }) => {
@@ -13,17 +38,31 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
   const [activeChannelIndex, setActiveChannelIndex] = useState(0);
   const [showOSD, setShowOSD] = useState(true);
   const [showGuide, setShowGuide] = useState(false);
-  const [focusedGuideChannelIndex, setFocusedGuideChannelIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const [playoutState, setPlayoutState] = useState<any>(null);
   const [channelInputDigits, setChannelInputDigits] = useState('');
+
+  // Guide Grid State
+  const [guideData, setGuideData] = useState<GuideChannelData[]>([]);
+  const [guideLoading, setGuideLoading] = useState(false);
+  const [guideFocusedRow, setGuideFocusedRow] = useState(0); // channel index in guide
+  const [guideFocusedCol, setGuideFocusedCol] = useState(0); // program index in that channel
+  const [currentTime, setCurrentTime] = useState<Date>(new Date());
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const osdTimerRef = useRef<any>(null);
   const digitTimerRef = useRef<any>(null);
+  const gridContainerRef = useRef<HTMLDivElement | null>(null);
+  const programRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
   const activeChannel = channels[activeChannelIndex];
+
+  // Keep a running clock for EPG timeline red line
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 10000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Fetch all channels
   useEffect(() => {
@@ -33,12 +72,35 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
         setChannels(data);
         if (data.length > 0) {
           const foundIdx = data.findIndex(c => c.number === initialChannelNumber);
-          setActiveChannelIndex(foundIdx >= 0 ? foundIdx : 0);
-          setFocusedGuideChannelIndex(foundIdx >= 0 ? foundIdx : 0);
+          const defaultIdx = foundIdx >= 0 ? foundIdx : 0;
+          setActiveChannelIndex(defaultIdx);
+          setGuideFocusedRow(defaultIdx);
         }
       })
       .catch(console.error);
   }, [initialChannelNumber]);
+
+  // Fetch guide timeline data whenever guide opens or active channel changes
+  const fetchGuideData = async () => {
+    try {
+      setGuideLoading(true);
+      const res = await fetch('/api/channels/guide?hours=4');
+      if (res.ok) {
+        const json = await res.json();
+        setGuideData(json.channels || []);
+      }
+    } catch (e) {
+      console.error('Failed to load guide data:', e);
+    } finally {
+      setGuideLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showGuide) {
+      fetchGuideData();
+    }
+  }, [showGuide]);
 
   // Fetch live playout state for active channel
   useEffect(() => {
@@ -67,10 +129,9 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     if (!video || !playoutState?.currentProgram) return;
 
     const offset = playoutState.currentProgram.elapsedSeconds;
-    // If video has metadata and is starting near 0s while broadcast offset is ahead
-    if (video.readyState >= 1 && video.duration > offset && video.duration > (playoutState.currentProgram.duration * 0.7)) {
-      if (video.currentTime < 3 && offset > 5) {
-        console.log(`[TVPlayer PlayoutSync] Seeking to live offset ${offset}s (currentTime: ${video.currentTime.toFixed(1)}s, duration: ${video.duration.toFixed(1)}s)`);
+    if (video.readyState >= 1 && video.duration > offset && offset > 3) {
+      if (Math.abs(video.currentTime - offset) > 8) {
+        console.log(`[TVPlayer PlayoutSync] Adjusting to live offset ${offset}s (was ${video.currentTime.toFixed(1)}s)`);
         video.currentTime = offset;
       }
     }
@@ -81,18 +142,32 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     if (!activeChannel || !videoRef.current) return;
 
     const video = videoRef.current;
-    const streamUrl = `/channels/${activeChannel.number}/stream.m3u8`;
+    const hlsUrl = `/channels/${activeChannel.number}/stream.m3u8`;
+    const directUrl = `/channels/${activeChannel.number}/stream`;
 
-    const handleLoadedMetadata = () => {
+    let seeksApplied = false;
+
+    const applyOffset = () => {
+      if (seeksApplied) return;
       const offset = playoutState?.currentProgram?.elapsedSeconds;
-      if (offset && offset > 3 && video.duration > offset && video.duration > (playoutState.currentProgram.duration * 0.7)) {
-        console.log(`[TVPlayer Metadata] Initial seek to ${offset}s`);
+      if (offset && offset > 3 && video.duration > offset) {
+        console.log(`[TVPlayer] Seeking to start offset: ${offset}s`);
         video.currentTime = offset;
+        seeksApplied = true;
       }
       video.play().catch(e => console.log('Autoplay prevented:', e));
     };
 
+    const handleLoadedMetadata = () => {
+      applyOffset();
+    };
+
+    const handleCanPlay = () => {
+      applyOffset();
+    };
+
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('canplay', handleCanPlay);
 
     if (Hls.isSupported()) {
       if (hlsRef.current) {
@@ -102,30 +177,31 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
+        backBufferLength: 30,
       });
 
       hlsRef.current = hls;
-      hls.loadSource(streamUrl);
+      hls.loadSource(hlsUrl);
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        video.play().catch(e => console.log('Autoplay prevented:', e));
+        applyOffset();
       });
 
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
-          // If HLS fails, fallback to direct video stream
-          console.warn('HLS fatal error, falling back to direct video stream:', data);
-          video.src = `/channels/${activeChannel.number}/stream`;
-          video.play().catch(() => {});
+          console.warn('HLS fatal error encountered, switching to direct stream:', data);
+          hls.destroy();
+          hlsRef.current = null;
+          video.src = directUrl;
+          applyOffset();
         }
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      // Native Safari HLS
-      video.src = streamUrl;
+      video.src = hlsUrl;
       video.play().catch(() => {});
     } else {
-      video.src = `/channels/${activeChannel.number}/stream`;
+      video.src = directUrl;
       video.play().catch(() => {});
     }
 
@@ -133,6 +209,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
 
     return () => {
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('canplay', handleCanPlay);
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -165,7 +242,8 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
           const idx = channels.findIndex(c => c.number === targetNumber);
           if (idx >= 0) {
             setActiveChannelIndex(idx);
-            setFocusedGuideChannelIndex(idx);
+            setGuideFocusedRow(idx);
+            setGuideFocusedCol(0);
           }
           setChannelInputDigits('');
         }, 1200);
@@ -208,16 +286,39 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
       }
 
       if (showGuide) {
-        // Guide navigation
+        // Guide Grid Navigation
+        const currentRow = guideData[guideFocusedRow];
+        const programs = currentRow?.programs || [];
+
         if (e.key === 'ArrowUp') {
           e.preventDefault();
-          setFocusedGuideChannelIndex(prev => (prev > 0 ? prev - 1 : channels.length - 1));
+          setGuideFocusedRow(prev => {
+            const nextRow = prev > 0 ? prev - 1 : guideData.length - 1;
+            setGuideFocusedCol(0);
+            return nextRow;
+          });
         } else if (e.key === 'ArrowDown') {
           e.preventDefault();
-          setFocusedGuideChannelIndex(prev => (prev < channels.length - 1 ? prev + 1 : 0));
+          setGuideFocusedRow(prev => {
+            const nextRow = prev < guideData.length - 1 ? prev + 1 : 0;
+            setGuideFocusedCol(0);
+            return nextRow;
+          });
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          setGuideFocusedCol(prev => Math.max(0, prev - 1));
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          setGuideFocusedCol(prev => Math.min(programs.length - 1, prev + 1));
         } else if (e.key === 'Enter') {
           e.preventDefault();
-          setActiveChannelIndex(focusedGuideChannelIndex);
+          if (guideData[guideFocusedRow]) {
+            const selectedChannel = guideData[guideFocusedRow].channel;
+            const chIdx = channels.findIndex(c => c.id === selectedChannel.id);
+            if (chIdx >= 0) {
+              setActiveChannelIndex(chIdx);
+            }
+          }
           setShowGuide(false);
           triggerOSD();
         }
@@ -244,7 +345,17 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showGuide, focusedGuideChannelIndex, channels, channelInputDigits, isMuted]);
+  }, [showGuide, guideFocusedRow, guideFocusedCol, guideData, channels, channelInputDigits, isMuted]);
+
+  // Keep focused program visible in guide scroll
+  useEffect(() => {
+    if (showGuide) {
+      const activeEl = programRefs.current[`${guideFocusedRow}-${guideFocusedCol}`];
+      if (activeEl) {
+        activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      }
+    }
+  }, [guideFocusedRow, guideFocusedCol, showGuide]);
 
   const formatSeconds = (sec?: number) => {
     if (!sec) return '0:00';
@@ -253,8 +364,39 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     return `${mins}:${s.toString().padStart(2, '0')}`;
   };
 
+  const formatClockTime = (dateInput: string | Date) => {
+    const d = new Date(dateInput);
+    let hours = d.getHours();
+    const minutes = d.getMinutes();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    return `${hours}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+  };
+
   const curProg = playoutState?.currentProgram;
-  const focusedChannel = channels[focusedGuideChannelIndex];
+
+  // Timeline slots generation for QuasiTV Grid Header (30-min intervals)
+  // Window: 30 mins ago to 3.5 hours from now = 4 hours total = 8 intervals of 30 mins
+  const timelineIntervals: Date[] = [];
+  const startSlot = new Date(currentTime);
+  startSlot.setMinutes(Math.floor(startSlot.getMinutes() / 30) * 30, 0, 0); // snap to last 30 min mark
+  const windowStartTime = new Date(startSlot.getTime() - 30 * 60 * 1000); // 1 slot prior
+  for (let i = 0; i < 8; i++) {
+    timelineIntervals.push(new Date(windowStartTime.getTime() + i * 30 * 60 * 1000));
+  }
+
+  // Pixels per minute scaling factor (e.g., 30 mins = 220px, so 1 min = 7.33px)
+  const PIXELS_PER_MINUTE = 7.5;
+  const PIXELS_PER_30_MIN = 30 * PIXELS_PER_MINUTE; // 225px
+
+  // Calculate live red vertical line offset
+  const timelineStartMs = windowStartTime.getTime();
+  const currentElapsedMinutes = Math.max(0, (currentTime.getTime() - timelineStartMs) / (60 * 1000));
+  const liveIndicatorLeftPx = currentElapsedMinutes * PIXELS_PER_MINUTE;
+
+  const currentFocusedData = guideData[guideFocusedRow];
+  const focusedProgram = currentFocusedData?.programs?.[guideFocusedCol] || currentFocusedData?.channel.currentProgram;
 
   return (
     <div
@@ -270,18 +412,16 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
         className="w-full h-full object-contain bg-black"
       />
 
-      {/* Top Floating Station Bug & Controls */}
+      {/* Top Floating Station Bug & Exit Button */}
       <div className="absolute top-6 left-6 right-6 flex items-center justify-between z-30 pointer-events-none">
-        {/* Back to Admin Button */}
         <button
           onClick={onExit}
-          className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/70 hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white backdrop-blur transition-all"
+          className="pointer-events-auto flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-slate-950/80 hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white backdrop-blur transition-all"
         >
           <ArrowLeft className="w-4 h-4" />
           <span className="text-xs font-semibold">Exit TV</span>
         </button>
 
-        {/* Station Bug / Channel watermark */}
         <div className="flex items-center gap-3">
           {channelInputDigits && (
             <div className="px-4 py-2 rounded-xl bg-cyan-500 text-slate-950 font-black text-2xl font-mono shadow-2xl animate-pulse">
@@ -290,7 +430,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
           )}
 
           {activeChannel && (
-            <div className="px-3 py-1.5 rounded-xl bg-slate-950/60 border border-slate-800/80 backdrop-blur flex items-center gap-2">
+            <div className="px-3.5 py-1.5 rounded-xl bg-slate-950/70 border border-slate-800/80 backdrop-blur flex items-center gap-2.5">
               <span className="w-5 h-5 rounded bg-cyan-950 text-cyan-400 flex items-center justify-center font-bold text-xs">
                 {activeChannel.number}
               </span>
@@ -302,14 +442,13 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
         </div>
       </div>
 
-      {/* QuasiTV On-Screen Display (OSD) Banner (Bottom) */}
+      {/* Bottom OSD Banner (When Guide is hidden) */}
       <div
         className={`absolute bottom-6 left-6 right-6 z-30 transition-all duration-300 transform ${
           showOSD && !showGuide ? 'translate-y-0 opacity-100' : 'translate-y-8 opacity-0 pointer-events-none'
         }`}
       >
         <div className="max-w-4xl mx-auto rounded-2xl bg-slate-950/90 border border-slate-800/90 shadow-2xl backdrop-blur-md p-5 flex flex-col sm:flex-row gap-5">
-          {/* Channel Logo / Number Badge */}
           <div className="flex sm:flex-col items-center justify-between sm:justify-center p-3 sm:w-28 bg-slate-900/80 rounded-xl border border-slate-800 shrink-0 text-center">
             <span className="text-2xl font-black text-cyan-400 font-mono">
               {activeChannel?.number}
@@ -320,7 +459,6 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
             <span className="text-[10px] text-slate-500">{activeChannel?.groupTitle}</span>
           </div>
 
-          {/* Program Details */}
           <div className="flex-1 min-w-0 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 flex-wrap min-w-0">
@@ -350,7 +488,6 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                 )}
               </div>
 
-              {/* Guide hint */}
               <span className="hidden sm:inline-block text-[11px] text-slate-400 font-mono">
                 Press <kbd className="px-1.5 py-0.5 bg-slate-800 rounded border border-slate-700 text-white font-bold">G</kbd> for Guide
               </span>
@@ -362,7 +499,6 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
               </p>
             )}
 
-            {/* Playout Progress Bar */}
             {curProg && (
               <div className="space-y-1 pt-1">
                 <div className="w-full bg-slate-800/80 rounded-full h-2 overflow-hidden border border-slate-700/50">
@@ -378,18 +514,12 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
               </div>
             )}
 
-            {/* Up Next */}
             {playoutState?.nextProgram && (
               <div className="pt-2 border-t border-slate-800/80 text-xs text-slate-400 flex items-center gap-2 flex-wrap">
                 <span className="font-semibold text-slate-500">Up Next:</span>
                 {playoutState.nextProgram.seriesName && (
                   <span className="px-1.5 py-0.5 rounded text-[9px] bg-purple-950 text-purple-300 font-semibold border border-purple-800">
                     {playoutState.nextProgram.seriesName}
-                  </span>
-                )}
-                {(playoutState.nextProgram.seasonNumber != null || playoutState.nextProgram.episodeNumber != null) && (
-                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-indigo-950 text-indigo-300 font-mono border border-indigo-800 font-bold">
-                    S{String(playoutState.nextProgram.seasonNumber || 1).padStart(2, '0')}E{String(playoutState.nextProgram.episodeNumber || 1).padStart(2, '0')}
                   </span>
                 )}
                 <span className="text-slate-300 font-medium truncate">
@@ -401,159 +531,268 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
         </div>
       </div>
 
-      {/* QuasiTV Full-Screen Interactive Cable Guide Grid */}
+      {/* OPTION 1: CLASSIC QUASITV / CABLE EPG TIMELINE GRID */}
       {showGuide && (
-        <div className="absolute inset-0 z-40 bg-slate-950/85 backdrop-blur-md flex flex-col p-6 sm:p-10 space-y-6">
-          {/* Guide Header */}
-          <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+        <div className="absolute inset-0 z-40 bg-slate-950/92 backdrop-blur-md flex flex-col p-4 sm:p-8 space-y-4">
+          {/* Top Bar: Title, Live Clock, and Guide Controls */}
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800/80">
             <div className="flex items-center space-x-3">
-              <div className="w-9 h-9 rounded-xl bg-cyan-500 flex items-center justify-center text-slate-950 font-bold">
+              <div className="w-10 h-10 rounded-xl bg-cyan-500 flex items-center justify-center text-slate-950 font-black shadow-lg shadow-cyan-500/20">
                 <Tv className="w-5 h-5" />
               </div>
               <div>
-                <h1 className="text-xl font-black text-white tracking-wider">MagicTV Cable Guide</h1>
+                <h1 className="text-xl font-black text-white tracking-wider flex items-center gap-2">
+                  <span>MagicTV Cable EPG</span>
+                  <span className="text-xs px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 uppercase font-mono">
+                    QuasiTV Grid
+                  </span>
+                </h1>
                 <p className="text-xs text-slate-400">
-                  Use Arrow Keys to navigate channels • Press Enter to watch • Press Esc to close
+                  D-Pad [▲ ▼ ◄ ►] Browse Schedule • [Enter] Tune In • [G / Esc] Close
                 </p>
               </div>
             </div>
 
-            <button
-              onClick={() => setShowGuide(false)}
-              className="px-4 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-xs font-semibold text-slate-300"
-            >
-              Close Guide (Esc)
-            </button>
+            <div className="flex items-center space-x-4">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono font-bold text-cyan-400">
+                <Clock className="w-4 h-4 text-cyan-400 animate-pulse" />
+                <span>{formatClockTime(currentTime)}</span>
+              </div>
+              <button
+                onClick={() => setShowGuide(false)}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-300"
+              >
+                Close (Esc)
+              </button>
+            </div>
           </div>
 
-          {/* Guide Body */}
-          <div className="flex-1 flex flex-col md:flex-row gap-6 min-h-0">
-            {/* Channel List (Vertical) */}
-            <div className="w-full md:w-80 overflow-y-auto space-y-2 pr-2">
-              {channels.map((ch, idx) => {
-                const isFocused = idx === focusedGuideChannelIndex;
-                const isCurrent = idx === activeChannelIndex;
-                return (
-                  <div
-                    key={ch.id}
-                    onClick={() => {
-                      setFocusedGuideChannelIndex(idx);
-                      setActiveChannelIndex(idx);
-                      setShowGuide(false);
-                    }}
-                    onMouseEnter={() => setFocusedGuideChannelIndex(idx)}
-                    className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
-                      isFocused
-                        ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-bold shadow-lg shadow-cyan-500/20 scale-[1.02]'
-                        : isCurrent
-                        ? 'bg-slate-900 border-cyan-800 text-white'
-                        : 'bg-slate-900/60 border-slate-800/80 text-slate-300 hover:bg-slate-800'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-3 min-w-0">
-                      <span
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-extrabold font-mono shrink-0 ${
-                          isFocused
-                            ? 'bg-slate-950 text-cyan-400'
-                            : 'bg-cyan-950 text-cyan-300 border border-cyan-800/60'
-                        }`}
-                      >
-                        {ch.number}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="text-sm font-bold truncate">{ch.name}</div>
-                        <div className={`text-[11px] truncate ${isFocused ? 'text-slate-900 font-medium' : 'text-slate-400'}`}>
-                          {ch.currentProgram?.title || 'Movie Channel'}
-                        </div>
-                      </div>
-                    </div>
+          {/* Focused Show Preview Header Banner */}
+          <div className="bg-slate-900/80 border border-slate-800/90 rounded-2xl p-4 flex gap-4 min-h-[110px] items-center">
+            {focusedProgram?.posterUrl && (
+              <img
+                src={
+                  focusedProgram.posterUrl.startsWith('http')
+                    ? focusedProgram.posterUrl
+                    : `/api/proxy/image?mediaId=${focusedProgram.mediaItemId}`
+                }
+                alt=""
+                className="w-16 h-24 object-cover rounded-lg border border-slate-800 shadow shrink-0"
+              />
+            )}
+            <div className="flex-1 min-w-0 space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                {currentFocusedData?.channel && (
+                  <span className="px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 font-mono text-xs font-extrabold border border-cyan-800">
+                    Ch. {currentFocusedData.channel.number} • {currentFocusedData.channel.name}
+                  </span>
+                )}
+                {focusedProgram?.seriesName && (
+                  <span className="px-2 py-0.5 rounded bg-purple-950 text-purple-300 text-xs font-bold border border-purple-800">
+                    {focusedProgram.seriesName}
+                  </span>
+                )}
+                {(focusedProgram?.seasonNumber != null || focusedProgram?.episodeNumber != null) && (
+                  <span className="px-1.5 py-0.5 rounded text-[11px] bg-indigo-950 text-indigo-300 font-mono font-bold border border-indigo-800">
+                    S{String(focusedProgram.seasonNumber || 1).padStart(2, '0')}E{String(focusedProgram.episodeNumber || 1).padStart(2, '0')}
+                  </span>
+                )}
+                <span className="text-white font-black text-lg truncate">
+                  {focusedProgram?.title || 'Continuous Playout'}
+                </span>
+                {focusedProgram?.year && (
+                  <span className="text-xs text-slate-400">({focusedProgram.year})</span>
+                )}
+                {focusedProgram?.startTime && focusedProgram?.endTime && (
+                  <span className="text-xs font-mono text-cyan-400 font-medium">
+                    [{formatClockTime(focusedProgram.startTime)} - {formatClockTime(focusedProgram.endTime)}]
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">
+                {focusedProgram?.overview || 'Broadcast schedule managed by MagicTV Smart Automation.'}
+              </p>
+            </div>
+            <div className="shrink-0 hidden md:block">
+              <button
+                onClick={() => {
+                  if (currentFocusedData?.channel) {
+                    const idx = channels.findIndex(c => c.id === currentFocusedData.channel.id);
+                    if (idx >= 0) setActiveChannelIndex(idx);
+                  }
+                  setShowGuide(false);
+                }}
+                className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-cyan-500/20"
+              >
+                Tune In (Enter)
+              </button>
+            </div>
+          </div>
 
-                    {isCurrent && (
-                      <span className="px-2 py-0.5 rounded text-[9px] uppercase tracking-wider font-extrabold bg-slate-950 text-cyan-400 border border-cyan-800 shrink-0">
-                        Live
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+          {/* EPG Timeline Grid Container */}
+          <div className="flex-1 flex flex-col min-h-0 bg-slate-950/70 border border-slate-800/80 rounded-2xl overflow-hidden">
+            {/* Top Fixed Time Scale Header */}
+            <div className="flex border-b border-slate-800 bg-slate-900/90 text-xs font-mono text-slate-400 sticky top-0 z-20">
+              {/* Channel Header Column */}
+              <div className="w-56 sm:w-64 p-3 font-bold uppercase tracking-wider text-slate-400 shrink-0 border-r border-slate-800 flex items-center justify-between">
+                <span>Channels ({guideData.length})</span>
+                <Radio className="w-3.5 h-3.5 text-cyan-400" />
+              </div>
+
+              {/* Time Slots (Scrollable along with grid) */}
+              <div className="flex-1 overflow-hidden relative">
+                <div className="flex relative" style={{ width: `${timelineIntervals.length * PIXELS_PER_30_MIN}px` }}>
+                  {timelineIntervals.map((interval, i) => (
+                    <div
+                      key={i}
+                      style={{ width: `${PIXELS_PER_30_MIN}px` }}
+                      className="p-3 border-r border-slate-800 text-center font-bold text-slate-300 shrink-0 select-none"
+                    >
+                      {formatClockTime(interval)}
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
 
-            {/* Focused Channel Program Preview Card */}
-            <div className="flex-1 bg-slate-900/70 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between overflow-y-auto">
-              {focusedChannel?.currentProgram ? (
-                <div className="space-y-4">
-                  <div className="flex items-start gap-4">
-                    {focusedChannel.currentProgram.posterUrl && (
-                      <img
-                        src={
-                          focusedChannel.currentProgram.posterUrl.startsWith('http')
-                            ? focusedChannel.currentProgram.posterUrl
-                            : `/api/proxy/image?mediaId=${focusedChannel.currentProgram.mediaItemId}`
-                        }
-                        alt=""
-                        className="w-24 h-36 object-cover rounded-xl border border-slate-800 shadow-lg shrink-0"
-                      />
-                    )}
-                    <div>
-                      <span className="text-xs font-bold text-cyan-400 uppercase tracking-wider">
-                        Now Airing on Ch. {focusedChannel.number}
-                      </span>
-                      <h2 className="text-2xl font-black text-white mt-1">
-                        {focusedChannel.currentProgram.title}
-                      </h2>
-                      <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400">
-                        {focusedChannel.currentProgram.year && <span>{focusedChannel.currentProgram.year}</span>}
-                        {focusedChannel.currentProgram.contentRating && (
-                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
-                            {focusedChannel.currentProgram.contentRating}
-                          </span>
-                        )}
-                        <span className="font-mono">
-                          {Math.round(focusedChannel.currentProgram.duration / 60)} min
-                        </span>
-                      </div>
+            {/* Channels & Programs Rows (Vertical & Horizontal Scrollable Area) */}
+            <div ref={gridContainerRef} className="flex-1 overflow-y-auto overflow-x-auto relative">
+              {/* Vertical Live "Now" Indicator Line */}
+              <div
+                className="absolute top-0 bottom-0 z-10 pointer-events-none flex flex-col items-center"
+                style={{ left: `${224 + liveIndicatorLeftPx}px` }} // 224px channel column offset
+              >
+                <div className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-md shadow-red-500/50 -mt-1" />
+                <div className="w-0.5 flex-1 bg-red-500 shadow-lg shadow-red-500" />
+              </div>
 
-                      {focusedChannel.currentProgram.genres && (
-                        <div className="flex flex-wrap gap-1.5 mt-2.5">
-                          {focusedChannel.currentProgram.genres.map(g => (
-                            <span key={g} className="px-2 py-0.5 rounded-full text-[10px] bg-slate-800 text-slate-300">
-                              {g}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <p className="text-sm text-slate-300 leading-relaxed max-w-2xl">
-                    {focusedChannel.currentProgram.overview || 'Continuous movie broadcasting.'}
-                  </p>
-
-                  <div className="pt-2">
-                    <button
-                      onClick={() => {
-                        setActiveChannelIndex(focusedGuideChannelIndex);
-                        setShowGuide(false);
-                      }}
-                      className="px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold rounded-xl shadow-lg shadow-cyan-500/20 text-sm transition-all flex items-center gap-2"
-                    >
-                      <span>Tune In to Channel {focusedChannel.number}</span>
-                    </button>
-                  </div>
+              {guideLoading && guideData.length === 0 ? (
+                <div className="p-16 text-center text-slate-500">
+                  <Sparkles className="w-8 h-8 mx-auto text-cyan-500 animate-spin mb-3" />
+                  <p className="font-bold text-slate-300">Loading Electronic Program Guide...</p>
                 </div>
               ) : (
-                <div className="text-center py-20 text-slate-500">
-                  <Tv className="w-12 h-12 mx-auto text-slate-700 mb-3" />
-                  <p className="text-lg font-bold text-slate-400">Select a channel to preview</p>
-                </div>
-              )}
+                guideData.map((row, rowIdx) => {
+                  const isCurrentActive = channels[activeChannelIndex]?.id === row.channel.id;
+                  const isRowFocused = guideFocusedRow === rowIdx;
 
-              {/* Navigation instructions footer */}
-              <div className="pt-4 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400 font-mono">
-                <span>[▲ / ▼] Change Channel</span>
-                <span>[Enter] Tune In</span>
-                <span>[Esc / G] Close Guide</span>
-              </div>
+                  return (
+                    <div
+                      key={row.channel.id}
+                      className={`flex border-b border-slate-800/80 transition-colors ${
+                        isRowFocused ? 'bg-slate-900/60' : 'hover:bg-slate-900/30'
+                      }`}
+                    >
+                      {/* Left Channel Card */}
+                      <div
+                        onClick={() => {
+                          const idx = channels.findIndex(c => c.id === row.channel.id);
+                          if (idx >= 0) setActiveChannelIndex(idx);
+                          setShowGuide(false);
+                        }}
+                        className={`w-56 sm:w-64 p-3 shrink-0 border-r border-slate-800 flex items-center justify-between cursor-pointer sticky left-0 z-10 ${
+                          isRowFocused
+                            ? 'bg-cyan-500 text-slate-950 font-bold shadow-lg'
+                            : isCurrentActive
+                            ? 'bg-slate-900 border-r-cyan-500 text-white'
+                            : 'bg-slate-950/95 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-3 min-w-0">
+                          <span
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black font-mono shrink-0 ${
+                              isRowFocused
+                                ? 'bg-slate-950 text-cyan-400'
+                                : 'bg-cyan-950 text-cyan-300 border border-cyan-800/80'
+                            }`}
+                          >
+                            {row.channel.number}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="text-xs font-black truncate">{row.channel.name}</div>
+                            <div className={`text-[10px] truncate ${isRowFocused ? 'text-slate-900' : 'text-slate-400'}`}>
+                              {row.channel.groupTitle}
+                            </div>
+                          </div>
+                        </div>
+
+                        {isCurrentActive && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-slate-950 text-cyan-400 border border-cyan-800 shrink-0">
+                            Live
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Right Programs Timeline Bar */}
+                      <div className="flex-1 relative flex items-center h-14 overflow-hidden">
+                        <div
+                          className="flex h-full items-center relative"
+                          style={{ width: `${timelineIntervals.length * PIXELS_PER_30_MIN}px` }}
+                        >
+                          {row.programs.length === 0 ? (
+                            <div className="w-full px-4 text-xs text-slate-500 italic">
+                              Continuous 24/7 Playout
+                            </div>
+                          ) : (
+                            row.programs.map((prog, colIdx) => {
+                              const durationMinutes = Math.max(15, prog.duration / 60);
+                              const widthPx = Math.max(80, durationMinutes * PIXELS_PER_MINUTE);
+
+                              const isColFocused = isRowFocused && guideFocusedCol === colIdx;
+
+                              return (
+                                <div
+                                  key={prog.id}
+                                  ref={el => {
+                                    programRefs.current[`${rowIdx}-${colIdx}`] = el;
+                                  }}
+                                  onClick={() => {
+                                    setGuideFocusedRow(rowIdx);
+                                    setGuideFocusedCol(colIdx);
+                                    const idx = channels.findIndex(c => c.id === row.channel.id);
+                                    if (idx >= 0) setActiveChannelIndex(idx);
+                                    setShowGuide(false);
+                                  }}
+                                  onMouseEnter={() => {
+                                    setGuideFocusedRow(rowIdx);
+                                    setGuideFocusedCol(colIdx);
+                                  }}
+                                  style={{
+                                    width: `${widthPx}px`,
+                                    minWidth: '80px',
+                                  }}
+                                  className={`h-11 my-1.5 mx-0.5 px-3 rounded-xl border flex flex-col justify-center cursor-pointer transition-all shrink-0 ${
+                                    isColFocused
+                                      ? 'bg-cyan-500 text-slate-950 border-cyan-300 font-bold shadow-md shadow-cyan-500/30 scale-[1.01] z-10'
+                                      : 'bg-slate-900/80 border-slate-800 text-slate-300 hover:bg-slate-800 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <div className="text-xs font-bold truncate flex items-center gap-1.5">
+                                    {prog.seriesName && (
+                                      <span className={`text-[10px] uppercase font-semibold ${isColFocused ? 'text-slate-950' : 'text-purple-400'}`}>
+                                        {prog.seriesName} •
+                                      </span>
+                                    )}
+                                    <span className="truncate">{prog.title}</span>
+                                  </div>
+                                  <div
+                                    className={`text-[10px] font-mono flex items-center justify-between ${
+                                      isColFocused ? 'text-slate-900 font-medium' : 'text-slate-400'
+                                    }`}
+                                  >
+                                    <span>{formatClockTime(prog.startTime)}</span>
+                                    <span>{Math.round(prog.duration / 60)}m</span>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
@@ -561,3 +800,4 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     </div>
   );
 };
+
