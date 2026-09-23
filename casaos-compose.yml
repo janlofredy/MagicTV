@@ -1,0 +1,54 @@
+name: magictv
+services:
+  magictv:
+    image: ghcr.io/janlofredy/magictv:latest
+    container_name: magictv
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - target: 8000
+        published: 8000
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: /DATA/AppData/magictv
+        target: /data
+    environment:
+      - PORT=8000
+      - DATABASE_URL=file:/data/magictv.db
+      - BASE_URL=http://localhost:8000
+    x-casaos:
+      envs:
+        - container: PORT
+          description:
+            en_us: Web & IPTV Server Port (default 8000)
+        - container: BASE_URL
+          description:
+            en_us: Host IP or Domain URL (e.g. http://192.168.1.100:8000)
+      ports:
+        - container: '8000'
+          description:
+            en_us: Web UI, M3U Playlist & XMLTV EPG Port
+      volumes:
+        - container: /data
+          description:
+            en_us: MagicTV SQLite Database & Configuration folder
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+    - arm
+  main: magictv
+  author: janlofredy
+  category: Media
+  description:
+    en_us: Pseudo-live movie channel creator and IPTV playout server for Plex & Jellyfin. Generates M3U/XMLTV feeds for smart TVs and provides an interactive QuasiTV 10-foot TV experience.
+  tagline:
+    en_us: Movie Channels & IPTV Playout Server for Plex/Jellyfin
+  developer: janlofredy
+  icon: https://raw.githubusercontent.com/janlofredy/MagicTV/main/client/public/logo.svg
+  thumbnail: https://raw.githubusercontent.com/janlofredy/MagicTV/main/client/public/logo.svg
+  title:
+    en_us: MagicTV
+  scheme: http
+  port_map: '8000'

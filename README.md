@@ -2,6 +2,9 @@
 
 > **Automated Movie Channels & IPTV Playout Server for Plex and Jellyfin**
 
+[![Build & Publish Docker Image](https://github.com/janlofredy/MagicTV/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/janlofredy/MagicTV/actions/workflows/docker-publish.yml)
+[![Docker Image](https://img.shields.io/badge/Docker-ghcr.io%2Fjanlofredy%2Fmagictv-cyan?logo=docker)](https://github.com/janlofredy/MagicTV/pkgs/container/magictv)
+
 Inspired by QuasiTV and NostalgiaTV, **MagicTV** is a self-hosted web app and IPTV server that creates custom, pseudo-live movie channels from your existing Plex and Jellyfin media libraries. It hosts those channels as standard **M3U playlists** and **XMLTV EPG feeds** for smart TVs and IPTV players (TiviMate, Apple TV, Kodi, VLC), while also providing a built-in **10-foot TV web player** with full D-pad remote control navigation and electronic program guide (EPG).
 
 ---
@@ -22,64 +25,97 @@ Inspired by QuasiTV and NostalgiaTV, **MagicTV** is a self-hosted web app and IP
   - Interactive D-Pad / Arrow-Key Cable Guide overlay (press `G` or `Left Arrow`).
   - Channel surfing OSD info banner with live progress bar and next-up previews.
   - Direct channel number jumping (type `1`, `2`, `3`...).
-- **Docker-Ready**: Simple single-container deployment for Unraid, TrueNAS, Synology, Raspberry Pi, or Linux/macOS/Windows.
+- **Multi-Arch Docker Images**: Automated builds published to GitHub Container Registry (`ghcr.io`) supporting both `linux/amd64` (x86_64) and `linux/arm64` (Raspberry Pi, Apple Silicon, ARM NAS).
 
 ---
 
-## 🚀 Quick Start (Development)
+## 🏠 Install on CasaOS
 
-### Prerequisites
-- **Node.js**: v20 or later
-- **npm**
+Installing MagicTV on CasaOS takes less than 60 seconds.
 
-### Installation
+### Method 1: 1-Click Import via Compose (Recommended)
 
-1. Clone the repository and install dependencies:
-```bash
-npm install
-```
+1. Open your **CasaOS Dashboard** and click on **App Store**.
+2. Click **Custom Install** in the top-right corner.
+3. In the top-right of the install dialog, click the **Import** icon (`↓`).
+4. Paste this raw URL into the input field:
+   ```
+   https://raw.githubusercontent.com/janlofredy/MagicTV/main/casaos-compose.yml
+   ```
+   *(Or copy and paste the contents of [`casaos-compose.yml`](https://github.com/janlofredy/MagicTV/blob/main/casaos-compose.yml) directly).*
+5. Click **Submit**. CasaOS will automatically prefill the icon, title, port (8000), volume mappings, and environment variables.
+6. Click **Install**. Once installed, click the **MagicTV** app tile on your dashboard to open it!
 
-2. Initialize SQLite Database schema with Prisma:
-```bash
-npm --workspace=server run db:push
-```
+---
 
-3. Start both Backend & Frontend in development mode:
-```bash
-npm run dev
-```
+### Method 2: Manual Custom App Install in CasaOS
 
-4. Open [http://localhost:5173](http://localhost:5173) in your browser:
-   - **Dashboard**: Overview of channels, stats, and IPTV URLs.
-   - **Launch 10ft TV**: Fullscreen TV guide and player.
-   - **Media Servers**: Add your Plex or Jellyfin server URL and API token.
+If you prefer filling the CasaOS custom app form manually:
+
+1. In CasaOS, click **App Store** ➔ **Custom Install**.
+2. Configure the fields as follows:
+   - **Docker Image**: `ghcr.io/janlofredy/magictv:latest`
+   - **App Name**: `MagicTV`
+   - **Icon URL**: `https://raw.githubusercontent.com/janlofredy/MagicTV/main/client/public/logo.svg`
+   - **Web UI**: Set port to `8000` (Protocol: `HTTP`)
+   - **Network**: `Bridge`
+   - **Ports**: Host `8000` ➔ Container `8000` (TCP)
+   - **Volumes**:
+     - Host Path: `/DATA/AppData/magictv`
+     - Container Path: `/data`
+   - **Environment Variables**:
+     - `PORT`: `8000`
+     - `DATABASE_URL`: `file:/data/magictv.db`
+     - `BASE_URL`: `http://<your-casaos-ip>:8000`
+3. Click **Install**.
 
 ---
 
 ## 🐳 Docker Deployment
 
-Run with `docker-compose`:
+### Using Docker Compose
+Create a `docker-compose.yml`:
 
-```bash
-docker-compose up -d --build
+```yaml
+version: '3.8'
+
+services:
+  magictv:
+    image: ghcr.io/janlofredy/magictv:latest
+    container_name: magictv
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - DATABASE_URL=file:/data/magictv.db
+      - BASE_URL=http://localhost:8000
+    volumes:
+      - ./data:/data
 ```
 
-Or run directly with Docker:
+Run:
+```bash
+docker compose up -d
+```
 
+### Using Docker CLI
 ```bash
 docker run -d \
   --name magictv \
   -p 8000:8000 \
   -v $(pwd)/data:/data \
+  -e PORT=8000 \
+  -e DATABASE_URL="file:/data/magictv.db" \
   --restart unless-stopped \
-  magictv:latest
+  ghcr.io/janlofredy/magictv:latest
 ```
 
 ---
 
 ## 📺 Configuring IPTV Apps & Smart TVs
 
-### TiviMate / IPTV Smarters / OTT Navigator / Kodi
+### TiviMate / IPTV Smarters / OTT Navigator / Kodi / Apple TV
 1. In your IPTV app, choose **Add Playlist (M3U)**.
 2. Enter the Playlist URL:
    ```
@@ -89,19 +125,46 @@ docker run -d \
    ```
    http://<your-server-ip>:8000/iptv/epg.xml
    ```
-4. Update interval: Set to every 12 or 24 hours.
+4. Set the EPG refresh interval to every 12 or 24 hours.
 
 ---
 
 ## 🎮 10-Foot TV Controls
 
 When viewing the Web Player in 10-Foot Mode:
+
 | Key | Action |
 | --- | --- |
 | **`▲` / `▼`** | Channel Surf Up / Down |
-| **`G` / `◄`** | Open / Toggle EPG Cable Guide |
+| **`G` / `◄`** | Open / Toggle Full-screen EPG Cable Guide |
 | **`Enter`** | Tune in to focused channel |
 | **`Esc` / `Backspace`** | Close Guide / Exit TV Mode |
 | **`0` - `9`** | Direct Channel Number Input |
 | **`M`** | Mute / Unmute Audio |
 | **`F`** | Fullscreen Toggle |
+
+---
+
+## 🛠️ Development & Local Setup
+
+### Prerequisites
+- **Node.js**: v20 or later
+- **npm**
+
+### Installation
+```bash
+# Clone the repository
+git clone https://github.com/janlofredy/MagicTV.git
+cd MagicTV
+
+# Install all dependencies
+npm install
+
+# Initialize local SQLite database schema
+npm --workspace=server run db:push
+
+# Start server & client concurrently in dev mode
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173) in your browser.
