@@ -260,7 +260,15 @@ export class JellyfinService {
       return `${cleanUrl}/Videos/${itemId}/stream.mp4?MediaSourceId=${itemId}&VideoCodec=h264&AudioCodec=aac${bitrateParam}&StartTimeTicks=${ticks}&api_key=${token}`;
     }
 
-    return `${cleanUrl}/Videos/${itemId}/stream?static=true&StartTimeTicks=${ticks}&api_key=${token}`;
+    if (ticks > 0) {
+      // Jellyfin static streams IGNORE StartTimeTicks — the full file is always served from byte 0.
+      // When an offset is required (e.g. live broadcast mid-progress), use the transcoded stream.mp4
+      // which correctly starts encoding from StartTimeTicks.
+      return `${cleanUrl}/Videos/${itemId}/stream.mp4?MediaSourceId=${itemId}&VideoCodec=h264&AudioCodec=aac&StartTimeTicks=${ticks}&api_key=${token}`;
+    }
+
+    // No offset — direct play the original file for maximum quality & zero transcoding CPU
+    return `${cleanUrl}/Videos/${itemId}/stream?static=true&api_key=${token}`;
   }
 
   static getArtworkUrl(baseUrl: string, token: string, itemId: string, type: 'Primary' | 'Backdrop' = 'Primary'): string {
