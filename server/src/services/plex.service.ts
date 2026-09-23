@@ -236,16 +236,17 @@ export class PlexService {
     serverItemId: string,
     partKey?: string,
     offsetSeconds: number = 0,
-    preferHls: boolean = true
+    preferHls: boolean = true,
+    maxBitrate?: number
   ): string {
     const cleanUrl = this.normalizeUrl(baseUrl);
+    const bitrateParam = maxBitrate ? `&maxVideoBitrate=${Math.round(maxBitrate / 1000)}` : '';
     
     if (preferHls) {
       // Plex Universal Transcode / Direct Stream HLS endpoint
-      // directPlay=1, directStream=1 ensures no re-encoding if codec matches
       return `${cleanUrl}/video/:/transcode/universal/start.m3u8?path=${encodeURIComponent(
         `/library/metadata/${serverItemId}`
-      )}&mediaIndex=0&partIndex=0&protocol=hls&offset=${Math.max(0, Math.floor(offsetSeconds))}&fastSeek=1&directPlay=1&directStream=1&copyts=1&X-Plex-Token=${token}`;
+      )}&mediaIndex=0&partIndex=0&protocol=hls&offset=${Math.max(0, Math.floor(offsetSeconds))}&fastSeek=1&directPlay=1&directStream=1&copyts=1${bitrateParam}&X-Plex-Token=${token}`;
     }
 
     // Direct part file stream

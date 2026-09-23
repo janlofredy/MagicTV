@@ -434,7 +434,9 @@ export class SchedulerService {
   static async resolveStreamRedirectUrl(
     channelNumber: number,
     preferHls: boolean = true,
-    timestamp: Date = new Date()
+    timestamp: Date = new Date(),
+    customOffsetSeconds?: number,
+    maxBitrate?: number
   ): Promise<string> {
     const channel = await prisma.channel.findUnique({
       where: { number: channelNumber },
@@ -461,7 +463,7 @@ export class SchedulerService {
     }
 
     const server = mediaItem.server;
-    const offset = state.currentProgram.elapsedSeconds;
+    const offset = customOffsetSeconds !== undefined ? Math.max(0, customOffsetSeconds) : state.currentProgram.elapsedSeconds;
 
     // Check if rawMetadata has demo direct stream
     if (mediaItem.rawMetadata) {
@@ -488,7 +490,8 @@ export class SchedulerService {
         mediaItem.serverItemId,
         partKey,
         offset,
-        preferHls
+        preferHls,
+        maxBitrate
       );
     } else if (server.type === 'jellyfin') {
       return JellyfinService.getDirectStreamUrl(
@@ -496,7 +499,8 @@ export class SchedulerService {
         server.token,
         mediaItem.serverItemId,
         offset,
-        preferHls
+        preferHls,
+        maxBitrate
       );
     }
 

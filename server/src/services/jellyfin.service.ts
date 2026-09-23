@@ -243,14 +243,21 @@ export class JellyfinService {
     token: string,
     itemId: string,
     offsetSeconds: number = 0,
-    preferHls: boolean = true
+    preferHls: boolean = true,
+    maxBitrate?: number
   ): string {
     const cleanUrl = this.normalizeUrl(baseUrl);
     const ticks = Math.max(0, Math.floor(offsetSeconds * 10000000));
+    const bitrateParam = maxBitrate ? `&MaxStreamingBitrate=${maxBitrate}` : '';
 
     if (preferHls) {
       // Jellyfin requires MediaSourceId parameter, otherwise returns 400 Bad Request
-      return `${cleanUrl}/Videos/${itemId}/master.m3u8?MediaSourceId=${itemId}&StartTimeTicks=${ticks}&api_key=${token}&PlaySessionId=MagicTV-${Date.now()}`;
+      return `${cleanUrl}/Videos/${itemId}/master.m3u8?MediaSourceId=${itemId}&StartTimeTicks=${ticks}&api_key=${token}&PlaySessionId=MagicTV-${Date.now()}${bitrateParam}`;
+    }
+
+    if (maxBitrate) {
+      // Transcode stream for lower bitrate/quality (MP4 stream)
+      return `${cleanUrl}/Videos/${itemId}/stream.mp4?MediaSourceId=${itemId}&VideoCodec=h264&AudioCodec=aac${bitrateParam}&StartTimeTicks=${ticks}&api_key=${token}`;
     }
 
     return `${cleanUrl}/Videos/${itemId}/stream?static=true&StartTimeTicks=${ticks}&api_key=${token}`;

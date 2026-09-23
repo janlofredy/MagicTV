@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Channel } from '../../types.js';
 import Hls from 'hls.js';
-import { ArrowLeft, Tv, Clock, Radio, Sparkles, Volume2, VolumeX, RotateCcw, FastForward, Play, Pause } from 'lucide-react';
+import { ArrowLeft, Tv, Clock, Radio, Sparkles, Volume2, VolumeX, RotateCcw, FastForward, Play, Pause, Sliders } from 'lucide-react';
 
 interface TVPlayerProps {
   initialChannelNumber?: number;
@@ -44,6 +44,8 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
   const [videoCurrentTime, setVideoCurrentTime] = useState<number>(0);
   const [videoDuration, setVideoDuration] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
+  const [selectedQuality, setSelectedQuality] = useState<'auto' | '1080p' | '720p' | '480p' | '360p'>('auto');
+  const [showQualityMenu, setShowQualityMenu] = useState<boolean>(false);
   const activeProgramIdRef = useRef<string | null>(null);
   const [playoutState, setPlayoutState] = useState<any>(null);
   const [channelInputDigits, setChannelInputDigits] = useState('');
@@ -191,19 +193,31 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     }
   }, [playoutState, isLiveMode]);
 
-  const loadStream = (channelNumber: number) => {
+  const loadStream = (channelNumber: number, customOffset?: number, quality: string = selectedQuality) => {
     const video = videoRef.current;
     if (!video) return;
 
-    const hlsUrl = `/channels/${channelNumber}/stream.m3u8`;
-    const directUrl = `/channels/${channelNumber}/stream`;
+    const params = new URLSearchParams();
+    if (customOffset !== undefined) {
+      params.set('offset', String(Math.max(0, Math.floor(customOffset))));
+    }
+    if (quality && quality !== 'auto') {
+      params.set('quality', quality);
+    }
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+
+    const hlsUrl = `/channels/${channelNumber}/stream.m3u8${queryString}`;
+    const directUrl = `/channels/${channelNumber}/stream${queryString}`;
 
     let seeksApplied = false;
 
     const applyOffset = () => {
       if (seeksApplied) return;
-      // Only seek to offset if we are in live mode!
-      if (isLiveMode) {
+      if (customOffset !== undefined) {
+        // If stream was reloaded with a custom offset (e.g. 0 for start), video playhead starts at 0 or custom offset
+        video.currentTime = 0;
+        seeksApplied = true;
+      } else if (isLiveMode) {
         const offset = playoutState?.currentProgram?.elapsedSeconds;
         if (offset && offset > 3 && video.duration > offset) {
           console.log(`[TVPlayer] Seeking to start offset: ${offset}s`);
@@ -501,28 +515,53 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     const video = videoRef.current;
     if (!video) return;
     setIsLiveMode(false);
-    video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
+    const targetTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
+    
+    // If seeking backwards close to 0 or target is out of current media range, reload from backend
+    if (targetTime < 3 && activeChannel) {
+      restartFromBeginning();
+      return;
+    }
+
+    video.currentTime = targetTime;
+    setVideoCurrentTime(targetTime);
     triggerOSD();
   };
 
   const restartFromBeginning = () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !activeChannel) return;
     setIsLiveMode(false);
     console.log('[TVPlayer] Restarting current program from beginning (0s)');
-    video.currentTime = 0;
-    video.play().catch(() => {});
+    
+    // Always reload stream at offset 0 so browser receives whole media from 0:00
+    loadStream(activeChannel.number, 0, selectedQuality);
     triggerOSD();
   };
 
   const jumpToLive = () => {
     const video = videoRef.current;
-    if (!video || !playoutState?.currentProgram) return;
+    if (!video || !playoutState?.currentProgram || !activeChannel) return;
     setIsLiveMode(true);
-    const liveOffset = playoutState.currentProgram.elapsedSeconds;
-    console.log(`[TVPlayer] Jumping to live broadcast position (${liveOffset}s)`);
-    video.currentTime = liveOffset;
-    video.play().catch(() => {});
+    console.log('[TVPlayer] Jumping to live broadcast position');
+    // Reload live stream to sync with server playout
+    loadStream(activeChannel.number, undefined, selectedQuality);
+    triggerOSD();
+  };
+
+  const handleQualityChange = (newQuality: 'auto' | '1080p' | '720p' | '480p' | '360p') => {
+    setSelectedQuality(newQuality);
+    setShowQualityMenu(false);
+    if (!activeChannel) return;
+    
+    const currentPos = videoRef.current?.currentTime;
+    console.log(`[TVPlayer] Switching quality to ${newQuality} at position ${currentPos?.toFixed(1)}s`);
+    
+    if (isLiveMode) {
+      loadStream(activeChannel.number, undefined, newQuality);
+    } else {
+      loadStream(activeChannel.number, currentPos || 0, newQuality);
+    }
     triggerOSD();
   };
 
@@ -531,8 +570,28 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     const video = videoRef.current;
     if (!video) return;
     setIsLiveMode(false);
-    video.currentTime = targetTime;
     setVideoCurrentTime(targetTime);
+  };
+
+  const handleScrubberCommit = (e: React.MouseEvent<HTMLInputElement> | React.TouchEvent<HTMLInputElement>) => {
+    const targetTime = parseFloat((e.currentTarget as HTMLInputElement).value);
+    const video = videoRef.current;
+    if (!video || !activeChannel) return;
+    setIsLiveMode(false);
+
+    // If seeking near 0, reload stream from beginning
+    if (targetTime <= 5) {
+      restartFromBeginning();
+      return;
+    }
+
+    // Try setting currentTime directly
+    try {
+      video.currentTime = targetTime;
+    } catch {
+      // Fallback reload from server with offset
+      loadStream(activeChannel.number, targetTime, selectedQuality);
+    }
     triggerOSD();
   };
 
@@ -635,13 +694,17 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
           {/* Volume Mute Toggle Badge */}
           <button
             onClick={toggleMute}
-            className="pointer-events-auto px-3 py-1.5 rounded-xl bg-slate-950/70 hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white backdrop-blur flex items-center gap-1.5 transition-all text-xs font-semibold"
-            title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
+            className={`pointer-events-auto px-3.5 py-1.5 rounded-xl border backdrop-blur flex items-center gap-2 transition-all text-xs font-bold shadow-lg ${
+              isMuted
+                ? 'bg-red-950/80 hover:bg-red-900 border-red-500/50 text-red-200 animate-pulse'
+                : 'bg-slate-950/70 hover:bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
+            }`}
+            title={isMuted ? 'Muted — Click or press [M] to Unmute' : 'Audio Active — Click or press [M] to Mute'}
           >
             {isMuted ? (
               <>
-                <VolumeX className="w-4 h-4 text-amber-400" />
-                <span className="text-amber-400">Muted</span>
+                <VolumeX className="w-4 h-4 text-red-400" />
+                <span className="text-red-300">MUTED</span>
               </>
             ) : (
               <>
@@ -736,6 +799,8 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                   max={videoDuration || curProg?.duration || 100}
                   value={videoCurrentTime || curProg?.elapsedSeconds || 0}
                   onChange={handleScrubberChange}
+                  onMouseUp={handleScrubberCommit}
+                  onTouchEnd={handleScrubberCommit}
                   className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-400/50"
                 />
               </div>
@@ -786,6 +851,46 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                   >
                     +15s
                   </button>
+
+                  {/* Quality Selector Dropdown */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowQualityMenu(prev => !prev)}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all text-[11px] font-semibold"
+                      title="Select Streaming Quality"
+                    >
+                      <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>{selectedQuality === 'auto' ? 'Auto Quality' : selectedQuality}</span>
+                    </button>
+
+                    {showQualityMenu && (
+                      <div className="absolute bottom-full right-0 mb-2 w-44 rounded-xl bg-slate-900/95 border border-slate-700 shadow-2xl p-1.5 z-50 backdrop-blur space-y-1">
+                        <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                          Video Quality
+                        </div>
+                        {[
+                          { id: 'auto', label: 'Auto (Original)' },
+                          { id: '1080p', label: '1080p (4 Mbps)' },
+                          { id: '720p', label: '720p (2 Mbps)' },
+                          { id: '480p', label: '480p (1 Mbps)' },
+                          { id: '360p', label: '360p (0.6 Mbps)' },
+                        ].map(q => (
+                          <button
+                            key={q.id}
+                            onClick={() => handleQualityChange(q.id as any)}
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors ${
+                              selectedQuality === q.id
+                                ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                                : 'text-slate-300 hover:bg-slate-800'
+                            }`}
+                          >
+                            <span>{q.label}</span>
+                            {selectedQuality === q.id && <span className="text-cyan-400 text-xs">✓</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
                   {!isLiveMode && (
                     <button
