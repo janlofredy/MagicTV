@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model MediaServer {
+  id          String         @id @default(cuid())
+  name        String
+  type        String         // 'plex' | 'jellyfin'
+  url         String
+  token       String
+  userId      String?        // For Jellyfin user ID
+  lastSyncAt  DateTime?
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  libraries   MediaLibrary[]
+  mediaItems  MediaItem[]
+}
+
+model MediaLibrary {
+  id              String      @id @default(cuid())
+  serverId        String
+  serverSectionId String
+  name            String
+  type            String      @default("movie")
+  enabled         Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  server          MediaServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+}
+
+model MediaItem {
+  id            String            @id @default(cuid())
+  serverId      String
+  serverItemId  String            // Plex ratingKey or Jellyfin item id
+  title         String
+  originalTitle String?
+  year          Int?
+  overview      String?
+  tagline       String?
+  duration      Int               // duration in seconds
+  rating        Float?
+  contentRating String?
+  genres        String            @default("[]") // JSON string array
+  directors     String            @default("[]") // JSON string array
+  studios       String            @default("[]") // JSON string array
+  collections   String            @default("[]") // JSON string array
+  posterUrl     String?
+  backdropUrl   String?
+  rawMetadata   String?           // JSON string of full metadata
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  server        MediaServer       @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  schedules     ProgramSchedule[]
+
+  @@unique([serverId, serverItemId])
+}
+
+model Channel {
+  id            String            @id @default(cuid())
+  number        Int               @unique
+  name          String
+  description   String?
+  logoUrl       String?
+  groupTitle    String            @default("Movies")
+  mode          String            @default("continuous") // "continuous" | "slotted"
+  slotDuration  Int               @default(120)          // in minutes if slotted
+  shuffle       Boolean           @default(true)
+  rules         String?           // JSON string of filter rules
+  manualItemIds String?           // JSON string of array of MediaItem IDs
+  enabled       Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  schedules     ProgramSchedule[]
+}
+
+model ProgramSchedule {
+  id          String     @id @default(cuid())
+  channelId   String
+  mediaItemId String
+  title       String
+  startTime   DateTime
+  endTime     DateTime
+  duration    Int        // in seconds
+  orderIndex  Int
+  createdAt   DateTime   @default(now())
+  channel     Channel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  mediaItem   MediaItem  @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+
+  @@index([channelId, startTime, endTime])
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

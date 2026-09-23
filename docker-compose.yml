@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  magictv:
+    build: .
+    container_name: magictv
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - DATABASE_URL=file:/data/magictv.db
+      - BASE_URL=http://localhost:8000
+    volumes:
+      - ./data:/data

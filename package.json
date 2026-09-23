@@ -1,0 +1,23 @@
+{
+  "name": "magictv",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MagicTV: Automated Movie Channels & IPTV Playout Server for Plex and Jellyfin",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev:server": "npm --workspace=server run dev",
+    "dev:client": "npm --workspace=client run dev",
+    "dev": "concurrently -n \"server,client\" -c \"blue,green\" \"npm run dev:server\" \"npm run dev:client\"",
+    "build:server": "npm --workspace=server run build",
+    "build:client": "npm --workspace=client run build",
+    "build": "npm run build:client && npm run build:server",
+    "start": "npm --workspace=server run start",
+    "test": "npm --workspace=server run test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
