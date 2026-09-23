@@ -13,9 +13,12 @@ router.get(['/:channelNumber/stream', '/:channelNumber/stream.m3u8'], async (req
   try {
     const isHls = req.path.endsWith('.m3u8') || req.query.format === 'hls';
     
-    // Support custom seek offset (e.g. ?offset=0 for watch from start, or scrub seconds)
+    // Support custom seek offset (e.g. ?offset=0 or ?from=start for watch from beginning)
     let customOffset: number | undefined;
-    if (req.query.offset !== undefined) {
+    if (req.query.from === 'start') {
+      // ?from=start — always serve from the very beginning of the current media item
+      customOffset = 0;
+    } else if (req.query.offset !== undefined) {
       const parsedOffset = parseFloat(String(req.query.offset));
       if (!isNaN(parsedOffset)) {
         customOffset = Math.max(0, parsedOffset);

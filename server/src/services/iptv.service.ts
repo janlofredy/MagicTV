@@ -34,7 +34,11 @@ export class IptvService {
       const tvgChno = ch.number;
       const logo = ch.logoUrl || `${baseUrl}/api/channels/${ch.id}/logo`;
       const group = ch.groupTitle || 'Movies';
-      const streamUrl = `${baseUrl}/channels/${ch.number}/stream`;
+      // Use HLS starting from the beginning of the current media item.
+      // This lets Jellyfin Live TV expose full scrubbing controls (back to 00:00 or forward).
+      // The EPG/XMLTV still shows the correct live position; the player just starts from t=0
+      // so the viewer can scrub freely through the whole movie.
+      const streamUrl = `${baseUrl}/channels/${ch.number}/stream.m3u8?from=start`;
 
       lines.push(
         `#EXTINF:-1 tvg-id="${tvgId}" tvg-name="${tvgName}" tvg-chno="${tvgChno}" tvg-logo="${logo}" group-title="${group}",${ch.name}`
