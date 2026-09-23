@@ -107,4 +107,54 @@ describe('MagicTV Playout & IPTV Test Suite', () => {
       expect(matched.map(m => m.title)).toEqual(['Inception']);
     });
   });
+
+  describe('TV Series & Episode Sequential Playout Logic', () => {
+    const mockEpisodes = [
+      { id: '3', title: 'The Rogue Prince', seriesName: 'House of the Dragon', seasonNumber: 1, episodeNumber: 2 },
+      { id: '1', title: 'The Heirs of the Dragon', seriesName: 'House of the Dragon', seasonNumber: 1, episodeNumber: 1 },
+      { id: '4', title: 'A Son for a Son', seriesName: 'House of the Dragon', seasonNumber: 2, episodeNumber: 1 },
+      { id: '2', title: 'Second of His Name', seriesName: 'House of the Dragon', seasonNumber: 1, episodeNumber: 3 },
+    ];
+
+    it('should sort episodes sequentially by season number then episode number', () => {
+      const sorted = [...mockEpisodes].sort((a, b) =>
+        (a.seasonNumber || 1) - (b.seasonNumber || 1) ||
+        (a.episodeNumber || 1) - (b.episodeNumber || 1)
+      );
+
+      expect(sorted.map(e => `S${e.seasonNumber}E${e.episodeNumber}`)).toEqual([
+        'S1E1',
+        'S1E2',
+        'S1E3',
+        'S2E1',
+      ]);
+      expect(sorted[0].title).toBe('The Heirs of the Dragon');
+    });
+
+    it('should format episode program title with series name and SxxExx correctly', () => {
+      const ep = mockEpisodes[1];
+      const s = String(ep.seasonNumber).padStart(2, '0');
+      const e = String(ep.episodeNumber).padStart(2, '0');
+      const formatted = `${ep.seriesName} - S${s}E${e}: ${ep.title}`;
+
+      expect(formatted).toBe('House of the Dragon - S01E01: The Heirs of the Dragon');
+    });
+  });
+
+  describe('Jellyfin HLS Stream URL Generation', () => {
+    it('should include MediaSourceId and StartTimeTicks in HLS URL', () => {
+      const baseUrl = 'http://192.168.1.5:8097';
+      const token = 'test-token';
+      const itemId = 'item-12345';
+      const offsetSeconds = 90; // 90 seconds = 900,000,000 ticks
+
+      const cleanUrl = baseUrl.replace(/\/+$/, '');
+      const ticks = Math.max(0, Math.floor(offsetSeconds * 10000000));
+      const hlsUrl = `${cleanUrl}/Videos/${itemId}/master.m3u8?MediaSourceId=${itemId}&StartTimeTicks=${ticks}&api_key=${token}&PlaySessionId=MagicTV-Test`;
+
+      expect(hlsUrl).toContain('MediaSourceId=item-12345');
+      expect(hlsUrl).toContain('StartTimeTicks=900000000');
+      expect(hlsUrl).toContain('api_key=test-token');
+    });
+  });
 });

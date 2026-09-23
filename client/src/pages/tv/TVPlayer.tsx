@@ -61,12 +61,38 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     return () => clearInterval(timer);
   }, [activeChannel]);
 
+  // Synchronize playback position with live broadcast offset
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !playoutState?.currentProgram) return;
+
+    const offset = playoutState.currentProgram.elapsedSeconds;
+    // If video has metadata and is starting near 0s while broadcast offset is ahead
+    if (video.readyState >= 1 && video.duration > offset && video.duration > (playoutState.currentProgram.duration * 0.7)) {
+      if (video.currentTime < 3 && offset > 5) {
+        console.log(`[TVPlayer PlayoutSync] Seeking to live offset ${offset}s (currentTime: ${video.currentTime.toFixed(1)}s, duration: ${video.duration.toFixed(1)}s)`);
+        video.currentTime = offset;
+      }
+    }
+  }, [playoutState]);
+
   // Handle Video Stream Loading & Offset Playback
   useEffect(() => {
     if (!activeChannel || !videoRef.current) return;
 
     const video = videoRef.current;
     const streamUrl = `/channels/${activeChannel.number}/stream.m3u8`;
+
+    const handleLoadedMetadata = () => {
+      const offset = playoutState?.currentProgram?.elapsedSeconds;
+      if (offset && offset > 3 && video.duration > offset && video.duration > (playoutState.currentProgram.duration * 0.7)) {
+        console.log(`[TVPlayer Metadata] Initial seek to ${offset}s`);
+        video.currentTime = offset;
+      }
+      video.play().catch(e => console.log('Autoplay prevented:', e));
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
 
     if (Hls.isSupported()) {
       if (hlsRef.current) {
@@ -88,7 +114,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
 
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
-          // If HLS fails, fallback to direct MP4 stream
+          // If HLS fails, fallback to direct video stream
           console.warn('HLS fatal error, falling back to direct video stream:', data);
           video.src = `/channels/${activeChannel.number}/stream`;
           video.play().catch(() => {});
@@ -106,6 +132,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     triggerOSD();
 
     return () => {
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -300,6 +327,16 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                 <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-bold text-[10px] uppercase tracking-wider border border-cyan-500/30">
                   Now Playing
                 </span>
+                {curProg?.seriesName && (
+                  <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold text-[11px] uppercase tracking-wider border border-purple-500/40">
+                    {curProg.seriesName}
+                  </span>
+                )}
+                {(curProg?.seasonNumber != null || curProg?.episodeNumber != null) && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-900/60 text-indigo-300 font-mono border border-indigo-700 font-bold">
+                    S{String(curProg.seasonNumber || 1).padStart(2, '0')}E{String(curProg.episodeNumber || 1).padStart(2, '0')}
+                  </span>
+                )}
                 <h2 className="text-lg font-bold text-white truncate">
                   {curProg?.title || 'Continuous Playout'}
                 </h2>
@@ -343,8 +380,18 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
 
             {/* Up Next */}
             {playoutState?.nextProgram && (
-              <div className="pt-2 border-t border-slate-800/80 text-xs text-slate-400 flex items-center gap-2">
+              <div className="pt-2 border-t border-slate-800/80 text-xs text-slate-400 flex items-center gap-2 flex-wrap">
                 <span className="font-semibold text-slate-500">Up Next:</span>
+                {playoutState.nextProgram.seriesName && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-purple-950 text-purple-300 font-semibold border border-purple-800">
+                    {playoutState.nextProgram.seriesName}
+                  </span>
+                )}
+                {(playoutState.nextProgram.seasonNumber != null || playoutState.nextProgram.episodeNumber != null) && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-indigo-950 text-indigo-300 font-mono border border-indigo-800 font-bold">
+                    S{String(playoutState.nextProgram.seasonNumber || 1).padStart(2, '0')}E{String(playoutState.nextProgram.episodeNumber || 1).padStart(2, '0')}
+                  </span>
+                )}
                 <span className="text-slate-300 font-medium truncate">
                   {playoutState.nextProgram.title}
                 </span>

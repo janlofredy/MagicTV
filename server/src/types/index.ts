@@ -1,4 +1,5 @@
 export interface ChannelRules {
+  type?: 'movie' | 'episode' | 'all';
   genres?: string[];         // e.g. ["Action", "Sci-Fi"]
   genresOperator?: 'AND' | 'OR';
   minYear?: number;
@@ -7,7 +8,9 @@ export interface ChannelRules {
   directors?: string[];
   studios?: string[];
   collections?: string[];
-  sortBy?: 'random' | 'year_asc' | 'year_desc' | 'title' | 'rating';
+  seriesNames?: string[];
+  libraries?: string[];
+  sortBy?: 'random' | 'year_asc' | 'year_desc' | 'title' | 'rating' | 'episode_asc';
   limit?: number;
 }
 
@@ -19,6 +22,10 @@ export interface PlayoutState {
     id: string;
     mediaItemId: string;
     title: string;
+    type?: string;
+    seriesName?: string | null;
+    seasonNumber?: number | null;
+    episodeNumber?: number | null;
     year?: number | null;
     overview?: string | null;
     posterUrl?: string | null;
@@ -36,6 +43,10 @@ export interface PlayoutState {
   nextProgram: {
     id: string;
     title: string;
+    type?: string;
+    seriesName?: string | null;
+    seasonNumber?: number | null;
+    episodeNumber?: number | null;
     startTime: string;
     endTime: string;
     duration: number;

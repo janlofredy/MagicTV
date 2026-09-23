@@ -16,6 +16,12 @@ export interface MediaItem {
   id: string;
   title: string;
   originalTitle?: string | null;
+  type?: 'movie' | 'episode';
+  seriesId?: string | null;
+  seriesName?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+  libraryName?: string | null;
   year?: number | null;
   overview?: string | null;
   tagline?: string | null;
@@ -36,6 +42,10 @@ export interface ProgramInfo {
   id: string;
   mediaItemId: string;
   title: string;
+  type?: 'movie' | 'episode';
+  seriesName?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
   year?: number | null;
   overview?: string | null;
   posterUrl?: string | null;
@@ -58,16 +68,23 @@ export interface Channel {
   description?: string | null;
   logoUrl?: string | null;
   groupTitle: string;
+  type?: 'movie' | 'series' | 'mixed';
   mode: 'continuous' | 'slotted';
   slotDuration: number;
+  playMode?: 'shuffle' | 'sequential';
   shuffle: boolean;
   rules?: string | null;
   manualItemIds?: string | null;
+  seriesIds?: string | null;
   enabled: boolean;
   currentProgram?: ProgramInfo | null;
   nextProgram?: {
     id: string;
     title: string;
+    type?: 'movie' | 'episode';
+    seriesName?: string | null;
+    seasonNumber?: number | null;
+    episodeNumber?: number | null;
     startTime: string;
     endTime: string;
     duration: number;

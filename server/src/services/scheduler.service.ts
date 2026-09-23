@@ -35,7 +35,33 @@ export class SchedulerService {
       return [];
     }
 
+    // Filter by channel type (movie vs series)
+    if (channel.type === 'series') {
+      allItems = allItems.filter(item => item.type === 'episode');
+    } else if (channel.type === 'movie') {
+      allItems = allItems.filter(item => item.type === 'movie');
+    }
+
+    // Filter by dedicated seriesIds if present on channel
+    if (channel.seriesIds) {
+      try {
+        const allowedSeries = JSON.parse(channel.seriesIds);
+        if (Array.isArray(allowedSeries) && allowedSeries.length > 0) {
+          allItems = allItems.filter(item =>
+            (item.seriesId && allowedSeries.includes(item.seriesId)) ||
+            (item.seriesName && allowedSeries.some(s => s.toLowerCase() === item.seriesName?.toLowerCase()))
+          );
+        }
+      } catch {}
+    }
+
     if (!channel.rules) {
+      if (channel.playMode === 'sequential') {
+        return allItems.sort((a, b) =>
+          (a.seasonNumber || 1) - (b.seasonNumber || 1) ||
+          (a.episodeNumber || 1) - (b.episodeNumber || 1)
+        );
+      }
       return channel.shuffle ? this.shuffleArray([...allItems]) : allItems;
     }
 
@@ -47,6 +73,30 @@ export class SchedulerService {
     }
 
     let filtered = allItems.filter(item => {
+      // Rule media type filter
+      if (rules.type && rules.type !== 'all') {
+        if (rules.type === 'movie' && item.type !== 'movie') return false;
+        if (rules.type === 'episode' && item.type !== 'episode') return false;
+      }
+
+      // Series names filter
+      if (rules.seriesNames && rules.seriesNames.length > 0) {
+        if (!item.seriesName) return false;
+        const matchesSeries = rules.seriesNames.some(s =>
+          item.seriesName?.toLowerCase() === s.toLowerCase()
+        );
+        if (!matchesSeries) return false;
+      }
+
+      // Libraries filter
+      if (rules.libraries && rules.libraries.length > 0) {
+        if (!item.libraryName) return false;
+        const matchesLib = rules.libraries.some(lib =>
+          item.libraryName?.toLowerCase() === lib.toLowerCase()
+        );
+        if (!matchesLib) return false;
+      }
+
       // 1. Genre filter
       if (rules.genres && rules.genres.length > 0) {
         let itemGenres: string[] = [];
@@ -91,7 +141,21 @@ export class SchedulerService {
         if (!hasDirector) return false;
       }
 
-      // 5. Collections filter
+      // 5. Studios filter
+      if (rules.studios && rules.studios.length > 0) {
+        let itemStudios: string[] = [];
+        try {
+          itemStudios = JSON.parse(item.studios || '[]');
+        } catch {
+          itemStudios = [];
+        }
+        const hasStudio = rules.studios.some(s =>
+          itemStudios.some(is => is.toLowerCase().includes(s.toLowerCase()))
+        );
+        if (!hasStudio) return false;
+      }
+
+      // 6. Collections filter
       if (rules.collections && rules.collections.length > 0) {
         let itemCollections: string[] = [];
         try {
@@ -108,13 +172,24 @@ export class SchedulerService {
       return true;
     });
 
-    // If filtering eliminated all movies, fallback to allItems so channel never goes black
+    // If filtering eliminated all items, fallback to allItems so channel never goes black
     if (filtered.length === 0) {
       filtered = allItems;
     }
 
     // Sort or Shuffle
-    if (rules.sortBy === 'year_asc') {
+    if (channel.playMode === 'sequential' || rules.sortBy === 'episode_asc') {
+      filtered.sort((a, b) => {
+        // First group by seriesName if applicable
+        if (a.seriesName && b.seriesName && a.seriesName !== b.seriesName) {
+          return a.seriesName.localeCompare(b.seriesName);
+        }
+        return (
+          (a.seasonNumber || 1) - (b.seasonNumber || 1) ||
+          (a.episodeNumber || 1) - (b.episodeNumber || 1)
+        );
+      });
+    } else if (rules.sortBy === 'year_asc') {
       filtered.sort((a, b) => (a.year || 0) - (b.year || 0));
     } else if (rules.sortBy === 'year_desc') {
       filtered.sort((a, b) => (b.year || 0) - (a.year || 0));
@@ -122,7 +197,7 @@ export class SchedulerService {
       filtered.sort((a, b) => a.title.localeCompare(b.title));
     } else if (rules.sortBy === 'rating') {
       filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0));
-    } else if (channel.shuffle || rules.sortBy === 'random') {
+    } else if (channel.playMode === 'shuffle' || channel.shuffle || rules.sortBy === 'random') {
       filtered = this.shuffleArray(filtered);
     }
 
@@ -194,10 +269,14 @@ export class SchedulerService {
         endTime = new Date(currentStartTime.getTime() + duration * 1000);
       }
 
+      const formattedTitle = item.type === 'episode' && item.seriesName
+        ? `${item.seriesName} - S${String(item.seasonNumber || 1).padStart(2, '0')}E${String(item.episodeNumber || 1).padStart(2, '0')}: ${item.title}`
+        : item.title;
+
       schedulesToCreate.push({
         channelId: channel.id,
         mediaItemId: item.id,
-        title: item.title,
+        title: formattedTitle,
         startTime: new Date(currentStartTime),
         endTime,
         duration,
@@ -303,6 +382,10 @@ export class SchedulerService {
         id: currentSchedule.id,
         mediaItemId: media.id,
         title: media.title,
+        type: media.type,
+        seriesName: media.seriesName,
+        seasonNumber: media.seasonNumber,
+        episodeNumber: media.episodeNumber,
         year: media.year,
         overview: media.overview,
         posterUrl: media.posterUrl,
@@ -321,6 +404,10 @@ export class SchedulerService {
         ? {
             id: nextSchedule.id,
             title: nextSchedule.mediaItem.title,
+            type: nextSchedule.mediaItem.type,
+            seriesName: nextSchedule.mediaItem.seriesName,
+            seasonNumber: nextSchedule.mediaItem.seasonNumber,
+            episodeNumber: nextSchedule.mediaItem.episodeNumber,
             startTime: nextSchedule.startTime.toISOString(),
             endTime: nextSchedule.endTime.toISOString(),
             duration: nextSchedule.duration,

@@ -6,6 +6,7 @@ export const MediaLibrary: React.FC = () => {
   const [items, setItems] = useState<MediaItem[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
+  const [selectedType, setSelectedType] = useState('all');
   const [selectedGenre, setSelectedGenre] = useState('');
   const [genres, setGenres] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -22,8 +23,9 @@ export const MediaLibrary: React.FC = () => {
     try {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
+      if (selectedType !== 'all') params.set('type', selectedType);
       if (selectedGenre) params.set('genre', selectedGenre);
-      params.set('limit', '40');
+      params.set('limit', '48');
 
       const res = await fetch(`/api/media?${params.toString()}`);
       if (res.ok) {
@@ -38,7 +40,7 @@ export const MediaLibrary: React.FC = () => {
 
   useEffect(() => {
     fetchMedia();
-  }, [selectedGenre]);
+  }, [selectedType, selectedGenre]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,10 +53,10 @@ export const MediaLibrary: React.FC = () => {
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
             <Film className="w-6 h-6 text-cyan-400" />
-            <span>Movie Catalog</span>
+            <span>Media Library</span>
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Browse movies indexed from your Plex and Jellyfin media servers ({total} total).
+            Browse movies and TV episodes indexed from your Plex and Jellyfin media servers ({total} total).
           </p>
         </div>
 
@@ -64,12 +66,22 @@ export const MediaLibrary: React.FC = () => {
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Search movies..."
+              placeholder="Search movies & shows..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-48 sm:w-60"
+              className="bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-44 sm:w-56"
             />
           </form>
+
+          <select
+            value={selectedType}
+            onChange={e => setSelectedType(e.target.value)}
+            className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+          >
+            <option value="all">All Media Types</option>
+            <option value="movie">Movies Only</option>
+            <option value="episode">TV Episodes Only</option>
+          </select>
 
           <select
             value={selectedGenre}
@@ -126,6 +138,18 @@ export const MediaLibrary: React.FC = () => {
 
               <div className="p-3 flex-1 flex flex-col justify-between">
                 <div>
+                  {movie.type === 'episode' && movie.seriesName && (
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 text-[10px] font-bold uppercase tracking-wider truncate border border-purple-800/60 max-w-[130px]">
+                        {movie.seriesName}
+                      </span>
+                      {(movie.seasonNumber != null || movie.episodeNumber != null) && (
+                        <span className="text-[10px] font-mono font-bold text-slate-400">
+                          S{String(movie.seasonNumber || 1).padStart(2, '0')}E{String(movie.episodeNumber || 1).padStart(2, '0')}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <h4 className="font-bold text-white text-xs truncate group-hover:text-cyan-300" title={movie.title}>
                     {movie.title}
                   </h4>

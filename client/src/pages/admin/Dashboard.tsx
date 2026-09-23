@@ -12,6 +12,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLaunchTV }) => {
     serversCount: 0,
     channelsCount: 0,
     moviesCount: 0,
+    episodesCount: 0,
+    totalCount: 0,
     totalHours: 0,
   });
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -126,13 +128,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLaunchTV }) => {
 
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Movie Catalog</span>
+            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Media Catalog</span>
             <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400">
               <Film className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-4 text-3xl font-bold text-white">{stats.moviesCount}</div>
-          <p className="mt-1 text-xs text-slate-500">Indexed & ready for rules</p>
+          <div className="mt-4 text-3xl font-bold text-white">{stats.totalCount || stats.moviesCount}</div>
+          <p className="mt-1 text-xs text-slate-500">
+            {stats.episodesCount ? `${stats.moviesCount} movies • ${stats.episodesCount} episodes` : 'Indexed & ready for rules'}
+          </p>
         </div>
 
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 shadow-sm">

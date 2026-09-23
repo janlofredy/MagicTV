@@ -38,8 +38,14 @@ model MediaItem {
   id            String            @id @default(cuid())
   serverId      String
   serverItemId  String            // Plex ratingKey or Jellyfin item id
+  type          String            @default("movie") // 'movie' | 'episode'
   title         String
   originalTitle String?
+  seriesId      String?           // Parent series ID for episodes
+  seriesName    String?           // Show name (e.g. "House of the Dragon")
+  seasonNumber  Int?
+  episodeNumber Int?
+  libraryName   String?
   year          Int?
   overview      String?
   tagline       String?
@@ -68,11 +74,14 @@ model Channel {
   description   String?
   logoUrl       String?
   groupTitle    String            @default("Movies")
+  type          String            @default("movie")      // "movie" | "series" | "mixed"
   mode          String            @default("continuous") // "continuous" | "slotted"
   slotDuration  Int               @default(120)          // in minutes if slotted
+  playMode      String            @default("shuffle")    // "shuffle" | "sequential"
   shuffle       Boolean           @default(true)
   rules         String?           // JSON string of filter rules
   manualItemIds String?           // JSON string of array of MediaItem IDs
+  seriesIds     String?           // JSON string array of series ids/names
   enabled       Boolean           @default(true)
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt

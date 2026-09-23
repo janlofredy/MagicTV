@@ -102,7 +102,16 @@ export class IptvService {
         channel: tvgId,
       });
 
-      progEle.ele('title', { lang: 'en' }).txt(prog.title);
+      if (media.type === 'episode' && media.seriesName) {
+        progEle.ele('title', { lang: 'en' }).txt(media.seriesName);
+        progEle.ele('sub-title', { lang: 'en' }).txt(media.title);
+        const s = media.seasonNumber || 1;
+        const e = media.episodeNumber || 1;
+        progEle.ele('episode-num', { system: 'onscreen' }).txt(`S${String(s).padStart(2, '0')}E${String(e).padStart(2, '0')}`);
+        progEle.ele('episode-num', { system: 'xmltv_ns' }).txt(`${s - 1}.${e - 1}.`);
+      } else {
+        progEle.ele('title', { lang: 'en' }).txt(prog.title);
+      }
 
       if (media.overview) {
         progEle.ele('desc', { lang: 'en' }).txt(media.overview);

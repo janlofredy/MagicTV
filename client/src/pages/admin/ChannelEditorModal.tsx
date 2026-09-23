@@ -17,6 +17,8 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
   const [name, setName] = useState(channel ? channel.name : '');
   const [description, setDescription] = useState(channel?.description || '');
   const [groupTitle, setGroupTitle] = useState(channel?.groupTitle || 'Movies');
+  const [channelType, setChannelType] = useState<'movie' | 'series' | 'mixed'>(channel?.type || 'movie');
+  const [playMode, setPlayMode] = useState<'shuffle' | 'sequential'>(channel?.playMode || 'shuffle');
   const [mode, setMode] = useState<'continuous' | 'slotted'>(channel?.mode || 'continuous');
   const [slotDuration, setSlotDuration] = useState(channel?.slotDuration || 120);
   const [shuffle, setShuffle] = useState(channel ? channel.shuffle : true);
@@ -24,12 +26,14 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
   // Smart Rules
   const initialRules = channel?.rules ? JSON.parse(channel.rules) : {};
   const [selectedGenres, setSelectedGenres] = useState<string[]>(initialRules.genres || []);
+  const [seriesName, setSeriesName] = useState<string>(initialRules.seriesNames?.[0] || '');
   const [minYear, setMinYear] = useState<string>(initialRules.minYear ? String(initialRules.minYear) : '');
   const [maxYear, setMaxYear] = useState<string>(initialRules.maxYear ? String(initialRules.maxYear) : '');
   const [minRating, setMinRating] = useState<string>(initialRules.minRating ? String(initialRules.minRating) : '');
-  const [sortBy, setSortBy] = useState<string>(initialRules.sortBy || 'random');
+  const [sortBy, setSortBy] = useState<string>(initialRules.sortBy || (channelType === 'series' ? 'episode_asc' : 'random'));
 
   const [availableGenres, setAvailableGenres] = useState<string[]>([]);
+  const [availableSeries, setAvailableSeries] = useState<Array<{ name: string; episodeCount: number }>>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,6 +41,11 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
     fetch('/api/media/genres')
       .then(res => res.json())
       .then(genres => setAvailableGenres(genres))
+      .catch(console.error);
+
+    fetch('/api/media/series')
+      .then(res => res.json())
+      .then(series => setAvailableSeries(series))
       .catch(console.error);
   }, []);
 
@@ -52,8 +61,10 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
     setError(null);
 
     const rulesObj: any = {
-      sortBy,
+      type: channelType === 'series' ? 'episode' : channelType === 'movie' ? 'movie' : 'all',
+      sortBy: playMode === 'sequential' ? 'episode_asc' : sortBy,
     };
+    if (seriesName) rulesObj.seriesNames = [seriesName];
     if (selectedGenres.length > 0) rulesObj.genres = selectedGenres;
     if (minYear) rulesObj.minYear = parseInt(minYear, 10);
     if (maxYear) rulesObj.maxYear = parseInt(maxYear, 10);
@@ -64,9 +75,11 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
       name,
       description,
       groupTitle,
+      type: channelType,
+      playMode,
       mode,
       slotDuration: Number(slotDuration),
-      shuffle,
+      shuffle: playMode === 'shuffle',
       rules: JSON.stringify(rulesObj),
       enabled: true,
     };
@@ -145,18 +158,81 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-1.5">Category / Group Title</label>
+              <label className="block text-xs font-semibold text-slate-400 mb-1.5">Content Type</label>
+              <select
+                value={channelType}
+                onChange={e => {
+                  const val = e.target.value as any;
+                  setChannelType(val);
+                  if (val === 'series') {
+                    setPlayMode('sequential');
+                    setGroupTitle('TV Series');
+                  } else {
+                    setPlayMode('shuffle');
+                    setGroupTitle('Movies');
+                  }
+                }}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500"
+              >
+                <option value="movie">Movies</option>
+                <option value="series">TV Shows (Episodes)</option>
+                <option value="mixed">Mixed Content</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1.5">Playout Order</label>
+              <select
+                value={playMode}
+                onChange={e => setPlayMode(e.target.value as any)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500"
+              >
+                <option value="shuffle">Shuffle (Random Broadcast)</option>
+                <option value="sequential">Sequential (S01E01 → S01E02...)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1.5">Category / Group</label>
               <input
                 type="text"
                 value={groupTitle}
                 onChange={e => setGroupTitle(e.target.value)}
-                placeholder="e.g. Movies, Sci-Fi, Classics"
+                placeholder="e.g. TV Series, Movies, Classics"
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500"
-              />
+              >
+              </input>
             </div>
+          </div>
 
+          {channelType === 'series' && availableSeries.length > 0 && (
+            <div className="p-3 bg-purple-950/20 border border-purple-900/40 rounded-xl space-y-1.5">
+              <label className="block text-xs font-semibold text-purple-300">
+                Dedicated 24/7 TV Series (Optional)
+              </label>
+              <select
+                value={seriesName}
+                onChange={e => {
+                  setSeriesName(e.target.value);
+                  if (e.target.value && !name) {
+                    setName(e.target.value);
+                  }
+                }}
+                className="w-full bg-slate-950 border border-purple-800/60 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-400"
+              >
+                <option value="">All TV Shows (Mixed Episodes)</option>
+                {availableSeries.map(s => (
+                  <option key={s.name} value={s.name}>
+                    {s.name} ({s.episodeCount} episodes)
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-400 mb-1.5">Playout Timing Mode</label>
               <select

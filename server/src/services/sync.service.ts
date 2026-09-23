@@ -18,175 +18,332 @@ export class SyncService {
     let total = 0;
 
     if (server.type === 'plex') {
-      let libraries = server.libraries.filter(lib => lib.enabled);
-      if (libraries.length === 0) {
-        // Auto-discover libraries if none are configured yet
-        const discovered = await PlexService.getMovieSections(server.url, server.token);
+      try {
+        const discovered = await PlexService.getSections(server.url, server.token);
         for (const disc of discovered) {
-          const createdLib = await prisma.mediaLibrary.create({
-            data: {
-              serverId: server.id,
-              serverSectionId: disc.id,
-              name: disc.title,
-              type: 'movie',
-              enabled: true,
-            },
+          const existingLib = await prisma.mediaLibrary.findFirst({
+            where: { serverId: server.id, serverSectionId: disc.id },
           });
-          libraries.push(createdLib);
+          if (!existingLib) {
+            await prisma.mediaLibrary.create({
+              data: {
+                serverId: server.id,
+                serverSectionId: disc.id,
+                name: disc.title,
+                type: disc.type,
+                enabled: true,
+              },
+            });
+          }
         }
+      } catch (err) {
+        console.warn('Could not auto-discover Plex libraries:', err);
       }
+
+      const libraries = await prisma.mediaLibrary.findMany({
+        where: { serverId: server.id, enabled: true },
+      });
 
       for (const lib of libraries) {
         let offset = 0;
         const batchSize = 100;
         let hasMore = true;
 
-        while (hasMore) {
-          const { movies, totalSize } = await PlexService.getMoviesFromSection(
-            server.url,
-            server.token,
-            lib.serverSectionId,
-            batchSize,
-            offset
-          );
+        if (lib.type === 'tvshows') {
+          while (hasMore) {
+            const { episodes, totalSize } = await PlexService.getEpisodesFromSection(
+              server.url,
+              server.token,
+              lib.serverSectionId,
+              batchSize,
+              offset
+            );
 
-          total = totalSize;
+            total += totalSize;
 
-          for (const movie of movies) {
-            const existing = await prisma.mediaItem.findUnique({
-              where: {
-                serverId_serverItemId: {
-                  serverId: server.id,
-                  serverItemId: movie.serverItemId,
-                },
-              },
-            });
-
-            const data = {
-              title: movie.title,
-              originalTitle: movie.originalTitle,
-              year: movie.year,
-              overview: movie.overview,
-              tagline: movie.tagline,
-              duration: movie.duration,
-              rating: movie.rating,
-              contentRating: movie.contentRating,
-              genres: JSON.stringify(movie.genres),
-              directors: JSON.stringify(movie.directors),
-              studios: JSON.stringify(movie.studios),
-              collections: JSON.stringify(movie.collections),
-              posterUrl: movie.posterPath,
-              backdropUrl: movie.backdropPath,
-              rawMetadata: movie.partKey ? JSON.stringify({ partKey: movie.partKey }) : null,
-            };
-
-            if (existing) {
-              await prisma.mediaItem.update({
-                where: { id: existing.id },
-                data,
-              });
-              updated++;
-            } else {
-              await prisma.mediaItem.create({
-                data: {
-                  ...data,
-                  serverId: server.id,
-                  serverItemId: movie.serverItemId,
+            for (const ep of episodes) {
+              const existing = await prisma.mediaItem.findUnique({
+                where: {
+                  serverId_serverItemId: {
+                    serverId: server.id,
+                    serverItemId: ep.serverItemId,
+                  },
                 },
               });
-              added++;
+
+              const data = {
+                type: 'episode',
+                title: ep.title,
+                seriesId: ep.seriesId,
+                seriesName: ep.seriesName,
+                seasonNumber: ep.seasonNumber,
+                episodeNumber: ep.episodeNumber,
+                libraryName: lib.name,
+                year: ep.year,
+                overview: ep.overview,
+                duration: ep.duration,
+                rating: ep.rating,
+                contentRating: ep.contentRating,
+                genres: JSON.stringify(ep.genres),
+                directors: JSON.stringify(ep.directors),
+                studios: JSON.stringify(ep.studios),
+                posterUrl: ep.posterPath,
+                backdropUrl: ep.backdropPath,
+                rawMetadata: ep.partKey ? JSON.stringify({ partKey: ep.partKey }) : null,
+              };
+
+              if (existing) {
+                await prisma.mediaItem.update({
+                  where: { id: existing.id },
+                  data,
+                });
+                updated++;
+              } else {
+                await prisma.mediaItem.create({
+                  data: {
+                    ...data,
+                    serverId: server.id,
+                    serverItemId: ep.serverItemId,
+                  },
+                });
+                added++;
+              }
+            }
+
+            offset += episodes.length;
+            if (episodes.length === 0 || offset >= totalSize) {
+              hasMore = false;
             }
           }
+        } else {
+          while (hasMore) {
+            const { movies, totalSize } = await PlexService.getMoviesFromSection(
+              server.url,
+              server.token,
+              lib.serverSectionId,
+              batchSize,
+              offset
+            );
 
-          offset += movies.length;
-          if (movies.length === 0 || offset >= totalSize) {
-            hasMore = false;
+            total += totalSize;
+
+            for (const movie of movies) {
+              const existing = await prisma.mediaItem.findUnique({
+                where: {
+                  serverId_serverItemId: {
+                    serverId: server.id,
+                    serverItemId: movie.serverItemId,
+                  },
+                },
+              });
+
+              const data = {
+                type: 'movie',
+                title: movie.title,
+                originalTitle: movie.originalTitle,
+                libraryName: lib.name,
+                year: movie.year,
+                overview: movie.overview,
+                tagline: movie.tagline,
+                duration: movie.duration,
+                rating: movie.rating,
+                contentRating: movie.contentRating,
+                genres: JSON.stringify(movie.genres),
+                directors: JSON.stringify(movie.directors),
+                studios: JSON.stringify(movie.studios),
+                collections: JSON.stringify(movie.collections),
+                posterUrl: movie.posterPath,
+                backdropUrl: movie.backdropPath,
+                rawMetadata: movie.partKey ? JSON.stringify({ partKey: movie.partKey }) : null,
+              };
+
+              if (existing) {
+                await prisma.mediaItem.update({
+                  where: { id: existing.id },
+                  data,
+                });
+                updated++;
+              } else {
+                await prisma.mediaItem.create({
+                  data: {
+                    ...data,
+                    serverId: server.id,
+                    serverItemId: movie.serverItemId,
+                  },
+                });
+                added++;
+              }
+            }
+
+            offset += movies.length;
+            if (movies.length === 0 || offset >= totalSize) {
+              hasMore = false;
+            }
           }
         }
       }
     } else if (server.type === 'jellyfin') {
-      let libraries = server.libraries.filter(lib => lib.enabled);
-      if (libraries.length === 0) {
-        const discovered = await JellyfinService.getMovieSections(server.url, server.token, server.userId);
+      try {
+        const discovered = await JellyfinService.getSections(server.url, server.token, server.userId);
         for (const disc of discovered) {
-          const createdLib = await prisma.mediaLibrary.create({
-            data: {
-              serverId: server.id,
-              serverSectionId: disc.id,
-              name: disc.title,
-              type: 'movie',
-              enabled: true,
-            },
+          const existingLib = await prisma.mediaLibrary.findFirst({
+            where: { serverId: server.id, serverSectionId: disc.id },
           });
-          libraries.push(createdLib);
+          if (!existingLib) {
+            await prisma.mediaLibrary.create({
+              data: {
+                serverId: server.id,
+                serverSectionId: disc.id,
+                name: disc.title,
+                type: disc.type,
+                enabled: true,
+              },
+            });
+          }
         }
+      } catch (err) {
+        console.warn('Could not auto-discover Jellyfin libraries:', err);
       }
+
+      const libraries = await prisma.mediaLibrary.findMany({
+        where: { serverId: server.id, enabled: true },
+      });
 
       for (const lib of libraries) {
         let startIndex = 0;
         const batchSize = 100;
         let hasMore = true;
 
-        while (hasMore) {
-          const { movies, totalSize } = await JellyfinService.getMoviesFromSection(
-            server.url,
-            server.token,
-            lib.serverSectionId,
-            server.userId,
-            batchSize,
-            startIndex
-          );
+        if (lib.type === 'tvshows') {
+          while (hasMore) {
+            const { episodes, totalSize } = await JellyfinService.getEpisodesFromSection(
+              server.url,
+              server.token,
+              lib.serverSectionId,
+              server.userId,
+              batchSize,
+              startIndex
+            );
 
-          total = totalSize;
+            total += totalSize;
 
-          for (const movie of movies) {
-            const existing = await prisma.mediaItem.findUnique({
-              where: {
-                serverId_serverItemId: {
-                  serverId: server.id,
-                  serverItemId: movie.serverItemId,
-                },
-              },
-            });
-
-            const data = {
-              title: movie.title,
-              originalTitle: movie.originalTitle,
-              year: movie.year,
-              overview: movie.overview,
-              tagline: movie.tagline,
-              duration: movie.duration,
-              rating: movie.rating,
-              contentRating: movie.contentRating,
-              genres: JSON.stringify(movie.genres),
-              directors: JSON.stringify(movie.directors),
-              studios: JSON.stringify(movie.studios),
-              collections: JSON.stringify(movie.collections),
-              posterUrl: movie.posterTag ? `/Items/${movie.serverItemId}/Images/Primary` : null,
-              backdropUrl: movie.backdropTag ? `/Items/${movie.serverItemId}/Images/Backdrop` : null,
-            };
-
-            if (existing) {
-              await prisma.mediaItem.update({
-                where: { id: existing.id },
-                data,
-              });
-              updated++;
-            } else {
-              await prisma.mediaItem.create({
-                data: {
-                  ...data,
-                  serverId: server.id,
-                  serverItemId: movie.serverItemId,
+            for (const ep of episodes) {
+              const existing = await prisma.mediaItem.findUnique({
+                where: {
+                  serverId_serverItemId: {
+                    serverId: server.id,
+                    serverItemId: ep.serverItemId,
+                  },
                 },
               });
-              added++;
+
+              const data = {
+                type: 'episode',
+                title: ep.title,
+                seriesId: ep.seriesId,
+                seriesName: ep.seriesName,
+                seasonNumber: ep.seasonNumber,
+                episodeNumber: ep.episodeNumber,
+                libraryName: lib.name,
+                year: ep.year,
+                overview: ep.overview,
+                duration: ep.duration,
+                rating: ep.rating,
+                contentRating: ep.contentRating,
+                genres: JSON.stringify(ep.genres),
+                directors: JSON.stringify(ep.directors),
+                studios: JSON.stringify(ep.studios),
+                posterUrl: ep.posterTag ? `/Items/${ep.serverItemId}/Images/Primary` : null,
+                backdropUrl: ep.backdropTag ? `/Items/${ep.serverItemId}/Images/Backdrop` : null,
+              };
+
+              if (existing) {
+                await prisma.mediaItem.update({
+                  where: { id: existing.id },
+                  data,
+                });
+                updated++;
+              } else {
+                await prisma.mediaItem.create({
+                  data: {
+                    ...data,
+                    serverId: server.id,
+                    serverItemId: ep.serverItemId,
+                  },
+                });
+                added++;
+              }
+            }
+
+            startIndex += episodes.length;
+            if (episodes.length === 0 || startIndex >= totalSize) {
+              hasMore = false;
             }
           }
+        } else {
+          while (hasMore) {
+            const { movies, totalSize } = await JellyfinService.getMoviesFromSection(
+              server.url,
+              server.token,
+              lib.serverSectionId,
+              server.userId,
+              batchSize,
+              startIndex
+            );
 
-          startIndex += movies.length;
-          if (movies.length === 0 || startIndex >= totalSize) {
-            hasMore = false;
+            total += totalSize;
+
+            for (const movie of movies) {
+              const existing = await prisma.mediaItem.findUnique({
+                where: {
+                  serverId_serverItemId: {
+                    serverId: server.id,
+                    serverItemId: movie.serverItemId,
+                  },
+                },
+              });
+
+              const data = {
+                type: 'movie',
+                title: movie.title,
+                originalTitle: movie.originalTitle,
+                libraryName: lib.name,
+                year: movie.year,
+                overview: movie.overview,
+                tagline: movie.tagline,
+                duration: movie.duration,
+                rating: movie.rating,
+                contentRating: movie.contentRating,
+                genres: JSON.stringify(movie.genres),
+                directors: JSON.stringify(movie.directors),
+                studios: JSON.stringify(movie.studios),
+                collections: JSON.stringify(movie.collections),
+                posterUrl: movie.posterTag ? `/Items/${movie.serverItemId}/Images/Primary` : null,
+                backdropUrl: movie.backdropTag ? `/Items/${movie.serverItemId}/Images/Backdrop` : null,
+              };
+
+              if (existing) {
+                await prisma.mediaItem.update({
+                  where: { id: existing.id },
+                  data,
+                });
+                updated++;
+              } else {
+                await prisma.mediaItem.create({
+                  data: {
+                    ...data,
+                    serverId: server.id,
+                    serverItemId: movie.serverItemId,
+                  },
+                });
+                added++;
+              }
+            }
+
+            startIndex += movies.length;
+            if (movies.length === 0 || startIndex >= totalSize) {
+              hasMore = false;
+            }
           }
         }
       }

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../../db.js';
 import { SchedulerService } from '../../services/scheduler.service.js';
+import { AutoChannelService } from '../../services/auto-channel.service.js';
 import { z } from 'zod';
 
 const router = Router();
@@ -11,11 +12,14 @@ const channelSchema = z.object({
   description: z.string().optional().nullable(),
   logoUrl: z.string().optional().nullable(),
   groupTitle: z.string().default('Movies'),
+  type: z.enum(['movie', 'series', 'mixed']).default('movie'),
   mode: z.enum(['continuous', 'slotted']).default('continuous'),
   slotDuration: z.number().int().default(120),
+  playMode: z.enum(['shuffle', 'sequential']).default('shuffle'),
   shuffle: z.boolean().default(true),
   rules: z.string().optional().nullable(),
   manualItemIds: z.string().optional().nullable(),
+  seriesIds: z.string().optional().nullable(),
   enabled: z.boolean().default(true),
 });
 
@@ -84,6 +88,16 @@ router.get('/:id/playout', async (req, res) => {
   try {
     const state = await SchedulerService.getCurrentPlayoutState(req.params.id);
     res.json(state);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/channels/auto-generate - QuasiTV style automatic channel creation
+router.post('/auto-generate', async (req, res) => {
+  try {
+    const result = await AutoChannelService.generateChannels(req.body);
+    res.json({ success: true, ...result });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

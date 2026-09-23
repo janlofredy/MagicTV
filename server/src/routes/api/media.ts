@@ -4,12 +4,24 @@ import { SyncService } from '../../services/sync.service.js';
 
 const router = Router();
 
-// GET /api/media - Browse cached movies with search & filters
+// GET /api/media - Browse cached movies & episodes with search & filters
 router.get('/', async (req, res) => {
   try {
-    const { search, genre, year, serverId, limit = '50', offset = '0' } = req.query;
+    const { search, genre, year, serverId, type, seriesName, libraryName, limit = '50', offset = '0' } = req.query;
 
     const where: any = {};
+
+    if (type && typeof type === 'string' && type !== 'all') {
+      where.type = type;
+    }
+
+    if (seriesName && typeof seriesName === 'string') {
+      where.seriesName = seriesName;
+    }
+
+    if (libraryName && typeof libraryName === 'string') {
+      where.libraryName = libraryName;
+    }
 
     if (serverId && typeof serverId === 'string') {
       where.serverId = serverId;
@@ -22,6 +34,7 @@ router.get('/', async (req, res) => {
     if (search && typeof search === 'string') {
       where.OR = [
         { title: { contains: search } },
+        { seriesName: { contains: search } },
         { overview: { contains: search } },
       ];
     }
@@ -35,13 +48,47 @@ router.get('/', async (req, res) => {
         where,
         take: parseInt(String(limit), 10),
         skip: parseInt(String(offset), 10),
-        orderBy: { title: 'asc' },
+        orderBy: [{ seriesName: 'asc' }, { seasonNumber: 'asc' }, { episodeNumber: 'asc' }, { title: 'asc' }],
         include: { server: { select: { name: true, type: true } } },
       }),
       prisma.mediaItem.count({ where }),
     ]);
 
     res.json({ items, total });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/media/series - Distinct TV shows list
+router.get('/series', async (req, res) => {
+  try {
+    const episodes = await prisma.mediaItem.findMany({
+      where: { type: 'episode', seriesName: { not: null } },
+      select: { seriesName: true, seriesId: true, posterUrl: true, backdropUrl: true },
+    });
+
+    const seriesMap = new Map<string, { name: string; seriesId?: string | null; posterUrl?: string | null; backdropUrl?: string | null; episodeCount: number }>();
+    for (const ep of episodes) {
+      if (!ep.seriesName) continue;
+      const key = ep.seriesName;
+      const existing = seriesMap.get(key);
+      if (existing) {
+        existing.episodeCount++;
+        if (!existing.posterUrl && ep.posterUrl) existing.posterUrl = ep.posterUrl;
+      } else {
+        seriesMap.set(key, {
+          name: key,
+          seriesId: ep.seriesId,
+          posterUrl: ep.posterUrl,
+          backdropUrl: ep.backdropUrl,
+          episodeCount: 1,
+        });
+      }
+    }
+
+    const list = Array.from(seriesMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+    res.json(list);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -71,10 +118,12 @@ router.get('/genres', async (req, res) => {
 // GET /api/media/stats - Dashboard summary metrics
 router.get('/stats', async (req, res) => {
   try {
-    const [serversCount, channelsCount, moviesCount, totalDurationResult] = await Promise.all([
+    const [serversCount, channelsCount, totalCount, moviesCount, episodesCount, totalDurationResult] = await Promise.all([
       prisma.mediaServer.count(),
       prisma.channel.count({ where: { enabled: true } }),
       prisma.mediaItem.count(),
+      prisma.mediaItem.count({ where: { type: 'movie' } }),
+      prisma.mediaItem.count({ where: { type: 'episode' } }),
       prisma.mediaItem.aggregate({
         _sum: { duration: true },
       }),
@@ -87,6 +136,8 @@ router.get('/stats', async (req, res) => {
       serversCount,
       channelsCount,
       moviesCount,
+      episodesCount,
+      totalCount,
       totalHours,
     });
   } catch (err: any) {

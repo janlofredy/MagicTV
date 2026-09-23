@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Radio, RefreshCw, Trash2, Edit, Play, Shuffle, Layers } from 'lucide-react';
+import { Plus, Radio, RefreshCw, Trash2, Edit, Play, Shuffle, Layers, Sparkles, Tv, Film } from 'lucide-react';
 import { Channel } from '../../types';
 import { ChannelEditorModal } from './ChannelEditorModal';
 
@@ -12,6 +12,9 @@ export const ChannelsManager: React.FC<ChannelsManagerProps> = ({ onLaunchTV }) 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateMsg, setGenerateMsg] = useState<string | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<string>('All');
 
   const fetchChannels = async () => {
     try {
@@ -38,6 +41,37 @@ export const ChannelsManager: React.FC<ChannelsManagerProps> = ({ onLaunchTV }) 
     setIsModalOpen(true);
   };
 
+  const handleAutoGenerate = async () => {
+    setIsGenerating(true);
+    setGenerateMsg(null);
+    try {
+      const res = await fetch('/api/channels/auto-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          createSeriesChannels: true,
+          createLibraryChannels: true,
+          createGenreChannels: true,
+          createStudioChannels: true,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setGenerateMsg(`Created ${data.createdCount} channels automatically!`);
+        await fetchChannels();
+        setTimeout(() => setGenerateMsg(null), 5000);
+      } else {
+        const err = await res.json();
+        setGenerateMsg(`Failed: ${err.error}`);
+      }
+    } catch (err: any) {
+      setGenerateMsg(`Error: ${err.message}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Are you sure you want to delete "${name}"?`)) return;
     try {
@@ -58,6 +92,12 @@ export const ChannelsManager: React.FC<ChannelsManagerProps> = ({ onLaunchTV }) 
     }
   };
 
+  // Extract unique groups
+  const groups = ['All', ...Array.from(new Set(channels.map(c => c.groupTitle))).filter(Boolean)];
+  const filteredChannels = selectedGroup === 'All'
+    ? channels
+    : channels.filter(c => c.groupTitle === selectedGroup);
+
   return (
     <div className="space-y-6">
       {/* Top Header */}
@@ -68,23 +108,61 @@ export const ChannelsManager: React.FC<ChannelsManagerProps> = ({ onLaunchTV }) 
             <span>Channel Lineup</span>
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Configure movie channels, rules, scheduling formats, and custom lineups.
+            Configure movie & TV series channels, rules, scheduling formats, and custom lineups.
           </p>
         </div>
 
-        <button
-          onClick={handleCreate}
-          className="flex items-center space-x-2 px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl shadow-md transition-all self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Channel</span>
-        </button>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            onClick={handleAutoGenerate}
+            disabled={isGenerating}
+            className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-purple-900/30 transition-all disabled:opacity-50"
+            title="Automatically generate channels for TV series, libraries, top genres and studios like QuasiTV"
+          >
+            <Sparkles className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
+            <span>{isGenerating ? 'Generating...' : 'Auto-Generate (QuasiTV)'}</span>
+          </button>
+
+          <button
+            onClick={handleCreate}
+            className="flex items-center space-x-2 px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl shadow-md transition-all self-start sm:self-auto"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Channel</span>
+          </button>
+        </div>
       </div>
+
+      {generateMsg && (
+        <div className="p-3 bg-purple-950/60 border border-purple-800 text-purple-200 text-sm rounded-xl flex items-center justify-between">
+          <span>{generateMsg}</span>
+          <button onClick={() => setGenerateMsg(null)} className="text-purple-400 hover:text-white text-xs">Dismiss</button>
+        </div>
+      )}
+
+      {/* Filter Tabs */}
+      {groups.length > 2 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          {groups.map(g => (
+            <button
+              key={g}
+              onClick={() => setSelectedGroup(g)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                selectedGroup === g
+                  ? 'bg-cyan-500 text-slate-950 shadow'
+                  : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+              }`}
+            >
+              {g}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Channel Grid / List */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
         <div className="divide-y divide-slate-800/80">
-          {channels.map(channel => (
+          {filteredChannels.map(channel => (
             <div
               key={channel.id}
               className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-800/30 transition-colors"
@@ -101,15 +179,29 @@ export const ChannelsManager: React.FC<ChannelsManagerProps> = ({ onLaunchTV }) 
                     <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700">
                       {channel.groupTitle}
                     </span>
+                    {channel.type === 'series' && (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-950 text-purple-300 border border-purple-800/60 flex items-center gap-1">
+                        <Tv className="w-3 h-3" /> TV Series
+                      </span>
+                    )}
+                    {channel.type === 'movie' && (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-950/80 text-cyan-300 border border-cyan-800/40 flex items-center gap-1">
+                        <Film className="w-3 h-3" /> Movies
+                      </span>
+                    )}
                     <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-950 text-indigo-300 border border-indigo-800/40 flex items-center gap-1">
                       <Layers className="w-3 h-3" />
                       {channel.mode === 'slotted' ? `${channel.slotDuration}m Time-Slotted` : 'Continuous'}
                     </span>
-                    {channel.shuffle && (
+                    {channel.playMode === 'sequential' ? (
+                      <span className="px-1.5 py-0.5 rounded text-[11px] bg-purple-950/80 text-purple-300 border border-purple-800/50 flex items-center gap-1">
+                        Sequential (S01E01 → ...)
+                      </span>
+                    ) : channel.shuffle ? (
                       <span className="px-1.5 py-0.5 rounded text-[11px] bg-slate-800 text-slate-400 flex items-center gap-1">
                         <Shuffle className="w-3 h-3" /> Shuffle
                       </span>
-                    )}
+                    ) : null}
                   </div>
 
                   {channel.description && (

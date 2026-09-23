@@ -29,6 +29,25 @@ export interface JellyfinMovieItem {
   backdropTag?: string;
 }
 
+export interface JellyfinEpisodeItem {
+  serverItemId: string;
+  seriesId: string;
+  seriesName: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  title: string;
+  overview?: string;
+  year?: number;
+  duration: number; // in seconds
+  rating?: number;
+  contentRating?: string;
+  genres: string[];
+  directors: string[];
+  studios: string[];
+  posterTag?: string;
+  backdropTag?: string;
+}
+
 export class JellyfinService {
   private static getHeaders(token: string) {
     return {
@@ -65,7 +84,7 @@ export class JellyfinService {
     }
   }
 
-  static async getMovieSections(baseUrl: string, token: string, userId?: string | null): Promise<JellyfinLibrarySection[]> {
+  static async getSections(baseUrl: string, token: string, userId?: string | null): Promise<JellyfinLibrarySection[]> {
     const cleanUrl = this.normalizeUrl(baseUrl);
     const url = userId
       ? `${cleanUrl}/Users/${userId}/Views`
@@ -84,12 +103,21 @@ export class JellyfinService {
     const items = data.Items || [];
 
     return items
-      .filter((folder: any) => folder.CollectionType === 'movies' || folder.Type === 'CollectionFolder')
+      .filter((folder: any) => 
+        folder.CollectionType === 'movies' || 
+        folder.CollectionType === 'tvshows' || 
+        folder.Type === 'CollectionFolder'
+      )
       .map((folder: any) => ({
         id: String(folder.Id),
         title: folder.Name,
-        type: folder.CollectionType || 'movies',
+        type: folder.CollectionType === 'tvshows' ? 'tvshows' : 'movies',
       }));
+  }
+
+  // Alias for backward compatibility
+  static async getMovieSections(baseUrl: string, token: string, userId?: string | null): Promise<JellyfinLibrarySection[]> {
+    return this.getSections(baseUrl, token, userId);
   }
 
   static async getMoviesFromSection(
@@ -118,7 +146,6 @@ export class JellyfinService {
     const items = data.Items || [];
 
     const movies: JellyfinMovieItem[] = items.map((item: any) => {
-      // Jellyfin duration is in ticks (1 second = 10,000,000 ticks)
       const durationSeconds = item.RunTimeTicks ? Math.round(item.RunTimeTicks / 10000000) : 5400;
       
       const directors = (item.People || [])
@@ -152,6 +179,65 @@ export class JellyfinService {
     return { movies, totalSize };
   }
 
+  static async getEpisodesFromSection(
+    baseUrl: string,
+    token: string,
+    sectionId: string,
+    userId?: string | null,
+    limit: number = 200,
+    startIndex: number = 0
+  ): Promise<{ episodes: JellyfinEpisodeItem[]; totalSize: number }> {
+    const cleanUrl = this.normalizeUrl(baseUrl);
+    const userPath = userId ? `/Users/${userId}` : '';
+    const url = `${cleanUrl}${userPath}/Items?ParentId=${sectionId}&IncludeItemTypes=Episode&Recursive=true&Fields=Overview,Genres,Studios,OfficialRating,CommunityRating,PremiereDate,RunTimeTicks,People,Taglines,OriginalTitle,SeriesName,SeasonName,IndexNumber,ParentIndexNumber,SeriesId&StartIndex=${startIndex}&Limit=${limit}`;
+
+    const res = await fetch(url, {
+      headers: this.getHeaders(token),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to fetch episodes from Jellyfin: ${res.statusText}`);
+    }
+
+    const data = (await res.json()) as any;
+    const totalSize = data.TotalRecordCount || (data.Items || []).length;
+    const items = data.Items || [];
+
+    const episodes: JellyfinEpisodeItem[] = items.map((item: any) => {
+      const durationSeconds = item.RunTimeTicks ? Math.round(item.RunTimeTicks / 10000000) : 2400; // default 40m for episode
+      
+      const directors = (item.People || [])
+        .filter((p: any) => p.Type === 'Director')
+        .map((p: any) => p.Name)
+        .filter(Boolean);
+
+      const studios = (item.Studios || []).map((s: any) => s.Name).filter(Boolean);
+      const genres = item.Genres || [];
+
+      return {
+        serverItemId: String(item.Id),
+        seriesId: String(item.SeriesId || ''),
+        seriesName: item.SeriesName || 'Unknown Show',
+        seasonNumber: item.ParentIndexNumber != null ? item.ParentIndexNumber : 1,
+        episodeNumber: item.IndexNumber != null ? item.IndexNumber : 1,
+        title: item.Name || `Episode ${item.IndexNumber || 1}`,
+        overview: item.Overview,
+        year: item.ProductionYear,
+        duration: durationSeconds > 0 ? durationSeconds : 2400,
+        rating: item.CommunityRating ? parseFloat(item.CommunityRating) : undefined,
+        contentRating: item.OfficialRating,
+        genres,
+        directors,
+        studios,
+        posterTag: item.ImageTags?.Primary,
+        backdropTag: item.BackdropImageTags?.[0],
+      };
+    });
+
+    return { episodes, totalSize };
+  }
+
   static getDirectStreamUrl(
     baseUrl: string,
     token: string,
@@ -163,7 +249,8 @@ export class JellyfinService {
     const ticks = Math.max(0, Math.floor(offsetSeconds * 10000000));
 
     if (preferHls) {
-      return `${cleanUrl}/Videos/${itemId}/master.m3u8?StartTimeTicks=${ticks}&api_key=${token}&PlaySessionId=MagicTV-${Date.now()}`;
+      // Jellyfin requires MediaSourceId parameter, otherwise returns 400 Bad Request
+      return `${cleanUrl}/Videos/${itemId}/master.m3u8?MediaSourceId=${itemId}&StartTimeTicks=${ticks}&api_key=${token}&PlaySessionId=MagicTV-${Date.now()}`;
     }
 
     return `${cleanUrl}/Videos/${itemId}/stream?static=true&StartTimeTicks=${ticks}&api_key=${token}`;
