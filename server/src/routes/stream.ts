@@ -1,133 +1,197 @@
 import { Router } from 'express';
 import { SchedulerService } from '../services/scheduler.service.js';
-import { JellyfinService } from '../services/jellyfin.service.js';
-import { PlexService } from '../services/plex.service.js';
-import { prisma } from '../db.js';
 import http from 'http';
 import https from 'https';
 
 const router = Router();
 
-// GET /channels/:channelNumber/stream.m3u8 — HLS redirect (for built-in MagicTV player)
-router.get('/:channelNumber/stream.m3u8', async (req, res) => {
-  const channelNumber = parseInt(req.params.channelNumber, 10);
-  if (isNaN(channelNumber)) return res.status(400).send('Invalid channel number');
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
-  try {
-    let customOffset: number | undefined;
-    if (req.query.from === 'start') {
-      customOffset = 0;
-    } else if (req.query.offset !== undefined) {
-      const p = parseFloat(String(req.query.offset));
-      if (!isNaN(p)) customOffset = Math.max(0, p);
-    }
+/** Make a raw HTTP/HTTPS GET request and return the IncomingMessage. */
+function fetchUpstream(url: string) {
+  return new Promise<http.IncomingMessage>((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    const req = client.get(url, { headers: { 'User-Agent': 'MagicTV/1.0' } }, resolve);
+    req.on('error', reject);
+  });
+}
 
-    let maxBitrate: number | undefined;
-    if (req.query.bitrate !== undefined) {
-      const b = parseInt(String(req.query.bitrate), 10);
-      if (!isNaN(b) && b > 0) maxBitrate = b;
-    } else if (req.query.quality) {
-      const q = String(req.query.quality).toLowerCase();
-      if (q === '1080p') maxBitrate = 4000000;
-      else if (q === '720p') maxBitrate = 2000000;
-      else if (q === '480p') maxBitrate = 1000000;
-      else if (q === '360p') maxBitrate = 600000;
-    }
+/** Read an IncomingMessage body to a string. */
+function readText(stream: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    stream.on('data', (c: Buffer) => (buf += c.toString()));
+    stream.on('end', () => resolve(buf));
+    stream.on('error', reject);
+  });
+}
 
-    const redirectUrl = await SchedulerService.resolveStreamRedirectUrl(
-      channelNumber,
-      true, // isHls
-      new Date(),
-      customOffset,
-      maxBitrate
-    );
+/**
+ * Rewrite every non-comment, non-empty line in an M3U8 to go through
+ * MagicTV's /channels/:num/hls proxy, encoding the full upstream URL.
+ */
+function rewriteM3u8(content: string, baseUrl: string, channelNum: number, magicTvOrigin: string): string {
+  return content
+    .split('\n')
+    .map((line) => {
+      const t = line.trim();
+      if (t === '' || t.startsWith('#')) return line;
+      // Resolve relative URLs against the playlist's own base URL
+      let abs: string;
+      try {
+        abs = new URL(t, baseUrl).toString();
+      } catch {
+        return line;
+      }
+      return `${magicTvOrigin}/channels/${channelNum}/hls?u=${encodeURIComponent(abs)}`;
+    })
+    .join('\n');
+}
 
-    res.redirect(302, redirectUrl);
-  } catch (err: any) {
-    console.error(`HLS redirect error for channel ${channelNumber}:`, err);
-    res.status(500).send(`Playout error: ${err.message}`);
+/** Parse offset / quality params from the request query string. */
+function parseStreamParams(query: Record<string, any>): { customOffset?: number; maxBitrate?: number } {
+  let customOffset: number | undefined;
+  if (query.from === 'start') {
+    customOffset = 0;
+  } else if (query.offset !== undefined) {
+    const p = parseFloat(String(query.offset));
+    if (!isNaN(p)) customOffset = Math.max(0, p);
   }
-});
 
-// GET /channels/:channelNumber/stream — byte-range proxy (for Jellyfin/Plex Live TV tuners)
-// Proxies the upstream static file with full Range header support so Jellyfin exposes
-// scrub controls in its Live TV player.
+  let maxBitrate: number | undefined;
+  if (query.bitrate !== undefined) {
+    const b = parseInt(String(query.bitrate), 10);
+    if (!isNaN(b) && b > 0) maxBitrate = b;
+  } else if (query.quality) {
+    const q = String(query.quality).toLowerCase();
+    if (q === '1080p') maxBitrate = 4_000_000;
+    else if (q === '720p') maxBitrate = 2_000_000;
+    else if (q === '480p') maxBitrate = 1_000_000;
+    else if (q === '360p') maxBitrate = 600_000;
+  }
+
+  return { customOffset, maxBitrate };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /channels/:num/stream  — Live TV tuner endpoint (used by Jellyfin / Plex M3U)
+//
+// Strategy:
+//   1. Resolve the current schedule → Jellyfin HLS URL with StartTimeTicks=<elapsed>
+//   2. Fetch the master.m3u8 from Jellyfin
+//   3. Rewrite every URL inside to go through /channels/:num/hls?u=…
+//   4. Serve the rewritten playlist to the tuner
+//
+// This avoids Jellyfin seeing a redirect to its own server (which caused the
+// "Playback Error") while giving the client a VOD HLS playlist that is fully
+// seekable from 0:00 to end-of-movie in Jellyfin's timeline.
+// ─────────────────────────────────────────────────────────────────────────────
 router.get('/:channelNumber/stream', async (req, res) => {
   const channelNumber = parseInt(req.params.channelNumber, 10);
   if (isNaN(channelNumber)) return res.status(400).send('Invalid channel number');
 
   try {
-    let customOffset: number | undefined;
-    if (req.query.from === 'start') {
-      customOffset = 0;
-    } else if (req.query.offset !== undefined) {
-      const p = parseFloat(String(req.query.offset));
-      if (!isNaN(p)) customOffset = Math.max(0, p);
-    }
+    const { customOffset, maxBitrate } = parseStreamParams(req.query as Record<string, any>);
 
-    let maxBitrate: number | undefined;
-    if (req.query.bitrate !== undefined) {
-      const b = parseInt(String(req.query.bitrate), 10);
-      if (!isNaN(b) && b > 0) maxBitrate = b;
-    } else if (req.query.quality) {
-      const q = String(req.query.quality).toLowerCase();
-      if (q === '1080p') maxBitrate = 4000000;
-      else if (q === '720p') maxBitrate = 2000000;
-      else if (q === '480p') maxBitrate = 1000000;
-      else if (q === '360p') maxBitrate = 600000;
-    }
-
-    // Resolve the upstream URL (always static=true at offset 0 for Live TV proxy)
-    // We override offset=0 so Jellyfin gets the full file from byte 0 and can byte-range seek.
-    // The live broadcast position is communicated via EPG/XMLTV, not stream start.
-    const upstreamUrl = await SchedulerService.resolveStreamRedirectUrl(
+    // Resolve to an HLS (master.m3u8) URL with the correct schedule offset
+    const hlsUrl = await SchedulerService.resolveStreamRedirectUrl(
       channelNumber,
-      false, // not HLS
+      true, // preferHls
       new Date(),
-      0, // always from start so Jellyfin can seek/scrub to any position
+      customOffset,
       maxBitrate
     );
 
-    // Proxy the upstream response with all byte-range headers forwarded
-    const upstreamReq = upstreamUrl.startsWith('https') ? https : http;
-    const proxyHeaders: Record<string, string> = {
-      'User-Agent': 'MagicTV/1.0',
-    };
-    if (req.headers.range) {
-      proxyHeaders['Range'] = req.headers.range;
+    // If Jellyfin returned a master.m3u8 URL, proxy + rewrite it
+    if (hlsUrl.includes('master.m3u8') || hlsUrl.includes('.m3u8')) {
+      const upstream = await fetchUpstream(hlsUrl);
+      const content = await readText(upstream);
+      const origin = `${req.protocol}://${req.get('host')}`;
+      const rewritten = rewriteM3u8(content, hlsUrl, channelNumber, origin);
+
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      res.setHeader('Cache-Control', 'no-cache, no-store');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      return res.send(rewritten);
     }
 
-    const upstream = upstreamReq.get(upstreamUrl, { headers: proxyHeaders }, (upstreamRes) => {
-      // Forward status and relevant headers
-      const forwardHeaders = [
-        'content-type',
-        'content-length',
-        'content-range',
-        'accept-ranges',
-        'last-modified',
-        'etag',
-      ];
-      const responseHeaders: Record<string, string | string[]> = {
-        // Always advertise byte-range support so Jellyfin shows scrub controls
-        'Accept-Ranges': 'bytes',
-      };
-      for (const h of forwardHeaders) {
-        const v = upstreamRes.headers[h];
-        if (v) responseHeaders[h] = v;
-      }
-
-      res.writeHead(upstreamRes.statusCode || 200, responseHeaders);
-      upstreamRes.pipe(res);
-    });
-
-    upstream.on('error', (err) => {
-      console.error(`Proxy stream error for channel ${channelNumber}:`, err);
-      if (!res.headersSent) res.status(502).send('Upstream stream error');
-    });
-
-    req.on('close', () => upstream.destroy());
+    // Fallback for Plex / non-HLS: plain redirect
+    return res.redirect(302, hlsUrl);
   } catch (err: any) {
     console.error(`Stream proxy error for channel ${channelNumber}:`, err);
+    res.status(500).send(`Playout error: ${err.message}`);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /channels/:num/hls?u=<encoded_upstream_url>
+//
+// Proxies a single HLS resource (playlist or TS segment) from the upstream
+// Jellyfin server.  Playlists are rewritten recursively so all segment URLs
+// continue to flow through MagicTV.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/:channelNumber/hls', async (req, res) => {
+  const channelNumber = parseInt(req.params.channelNumber, 10);
+  const encoded = String(req.query.u ?? '');
+  if (!encoded) return res.status(400).send('Missing u parameter');
+
+  let upstreamUrl: string;
+  try {
+    upstreamUrl = decodeURIComponent(encoded);
+  } catch {
+    return res.status(400).send('Invalid u parameter');
+  }
+
+  try {
+    const upstream = await fetchUpstream(upstreamUrl);
+    const ct = (upstream.headers['content-type'] as string) ?? '';
+    const isPlaylist = ct.includes('mpegurl') || upstreamUrl.includes('.m3u8');
+
+    if (isPlaylist) {
+      const content = await readText(upstream);
+      const origin = `${req.protocol}://${req.get('host')}`;
+      const rewritten = rewriteM3u8(content, upstreamUrl, channelNumber, origin);
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      res.setHeader('Cache-Control', 'no-cache, no-store');
+      return res.send(rewritten);
+    }
+
+    // Binary segment (MPEG-TS, etc.) — pipe directly
+    res.setHeader('Content-Type', ct || 'video/mp2t');
+    if (upstream.headers['content-length']) {
+      res.setHeader('Content-Length', upstream.headers['content-length'] as string);
+    }
+    upstream.pipe(res);
+    req.on('close', () => upstream.destroy());
+  } catch (err: any) {
+    console.error(`HLS proxy error for ${upstreamUrl}:`, err);
+    if (!res.headersSent) res.status(502).send('Upstream error');
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /channels/:num/stream.m3u8 — for the built-in MagicTV player
+// Redirects directly to Jellyfin HLS (no proxy needed; built-in player uses
+// HLS.js which isn't subject to Jellyfin's self-referential tuner restriction).
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/:channelNumber/stream.m3u8', async (req, res) => {
+  const channelNumber = parseInt(req.params.channelNumber, 10);
+  if (isNaN(channelNumber)) return res.status(400).send('Invalid channel number');
+
+  try {
+    const { customOffset, maxBitrate } = parseStreamParams(req.query as Record<string, any>);
+    const redirectUrl = await SchedulerService.resolveStreamRedirectUrl(
+      channelNumber,
+      true,
+      new Date(),
+      customOffset,
+      maxBitrate
+    );
+    res.redirect(302, redirectUrl);
+  } catch (err: any) {
+    console.error(`HLS redirect error for channel ${channelNumber}:`, err);
     res.status(500).send(`Playout error: ${err.message}`);
   }
 });
