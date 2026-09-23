@@ -34,6 +34,11 @@ export class SyncService {
                 enabled: true,
               },
             });
+          } else if (existingLib.type !== disc.type) {
+            await prisma.mediaLibrary.update({
+              where: { id: existingLib.id },
+              data: { type: disc.type },
+            });
           }
         }
       } catch (err) {
@@ -198,6 +203,11 @@ export class SyncService {
                 type: disc.type,
                 enabled: true,
               },
+            });
+          } else if (existingLib.type !== disc.type) {
+            await prisma.mediaLibrary.update({
+              where: { id: existingLib.id },
+              data: { type: disc.type },
             });
           }
         }
