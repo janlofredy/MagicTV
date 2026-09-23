@@ -113,17 +113,75 @@ docker run -d \
 
 ---
 
-## 📺 Configuring IPTV Apps & Smart TVs
+---
 
-### TiviMate / IPTV Smarters / OTT Navigator / Kodi / Apple TV
+## 📺 Setting Up Live TV in Jellyfin & Plex
+
+MagicTV generates standard IPTV M3U playlists and XMLTV EPG data feeds that integrate directly into Jellyfin and Plex, allowing you to watch your custom movie and TV series channels from any official Jellyfin or Plex client on Smart TVs, Apple TV, Android TV, Fire TV, and mobile devices.
+
+### 🍇 Jellyfin Live TV Setup
+
+1. Open your **Jellyfin Dashboard** as an administrator (`http://<jellyfin-ip>:8096`).
+2. Go to **Dashboard** ➔ **Live TV** (under the *Server* category on the left sidebar).
+3. **Add Tuner Device**:
+   - Under **Tuner Devices**, click the **`+`** button.
+   - Set **Tuner Type** to **`M3U Tuner`**.
+   - Enter your MagicTV Tuner URL:
+     ```text
+     http://<magictv-ip>:8000/iptv/channels.m3u
+     ```
+   - *(Optional)* Set **Simultaneous streams** to your preference (e.g. `4` or `0` for unlimited).
+   - Click **Save**.
+4. **Add TV Guide Data (EPG)**:
+   - Under **TV Guide Data Providers**, click the **`+`** button.
+   - Choose **`XMLTV`**.
+   - Enter your MagicTV XMLTV URL:
+     ```text
+     http://<magictv-ip>:8000/iptv/epg.xml
+     ```
+   - Click **Save**.
+5. **Refresh the Guide**:
+   - Go to **Dashboard** ➔ **Scheduled Tasks**.
+   - Find **Refresh Guide** and click the **Play (▶)** button to immediately fetch all channel icons, program descriptions, and air times.
+6. Open the Jellyfin home screen — you will now see **Live TV** with the full Channel Guide and scheduled programs ready to play!
+
+---
+
+### 🟠 Plex Live TV & DVR Setup
+
+*(Note: Plex requires a Plex Pass subscription to enable Live TV & DVR functionality).*
+
+1. Open the **Plex Web App** as an administrator (`http://<plex-ip>:32400/web`).
+2. Go to **Settings** (wrench icon in the top right) ➔ **Live TV & DVR** (under the *Manage* section on the left sidebar).
+3. Click **Set Up Plex DVR** (or **Add Device** if you already have tuners).
+4. If Plex does not automatically detect MagicTV, click **Don't see your device? Enter its network address manually**.
+5. Enter your MagicTV M3U URL:
+   ```text
+   http://<magictv-ip>:8000/iptv/channels.m3u
+   ```
+6. Click **Connect**. Plex will detect your channels and show the channel list. Click **Continue**.
+7. In the **Electronic Program Guide (EPG)** step:
+   - Select **Use XMLTV**.
+   - In the XMLTV Guide field, enter your MagicTV EPG URL:
+     ```text
+     http://<magictv-ip>:8000/iptv/epg.xml
+     ```
+   - Enter a title for the guide (e.g. `MagicTV Guide`).
+8. Click **Continue** to match the channels with the EPG feed, then click **Finish**.
+9. Plex will download the guide data. You can now tune into your channels under **Live TV on Plex** across all Plex apps!
+
+---
+
+### 📱 Third-Party IPTV Players (TiviMate / IPTV Smarters / Kodi / Apple TV)
+
 1. In your IPTV app, choose **Add Playlist (M3U)**.
 2. Enter the Playlist URL:
-   ```
-   http://<your-server-ip>:8000/iptv/channels.m3u
+   ```text
+   http://<magictv-ip>:8000/iptv/channels.m3u
    ```
 3. In the EPG / TV Guide settings, enter the XMLTV URL:
-   ```
-   http://<your-server-ip>:8000/iptv/epg.xml
+   ```text
+   http://<magictv-ip>:8000/iptv/epg.xml
    ```
 4. Set the EPG refresh interval to every 12 or 24 hours.
 
@@ -141,6 +199,10 @@ When viewing the Web Player in 10-Foot Mode:
 | **`Esc` / `Backspace`** | Close Guide / Exit TV Mode |
 | **`0` - `9`** | Direct Channel Number Input |
 | **`M`** | Mute / Unmute Audio |
+| **`R`** | Watch from Beginning (Restart current program) |
+| **`[` / `]`** | Rewind 15s / Fast Forward 15s |
+| **`Space`** | Play / Pause |
+| **`L`** | Jump to Live Broadcast |
 | **`F`** | Fullscreen Toggle |
 
 ---
