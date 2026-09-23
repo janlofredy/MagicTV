@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Channel } from '../../types.js';
 import Hls from 'hls.js';
-import { ArrowLeft, Tv, Clock, Radio, Sparkles } from 'lucide-react';
+import { ArrowLeft, Tv, Clock, Radio, Sparkles, Volume2, VolumeX, RotateCcw, FastForward, Play, Pause } from 'lucide-react';
 
 interface TVPlayerProps {
   initialChannelNumber?: number;
@@ -38,7 +38,13 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
   const [activeChannelIndex, setActiveChannelIndex] = useState(0);
   const [showOSD, setShowOSD] = useState(true);
   const [showGuide, setShowGuide] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const [showUnmutePrompt, setShowUnmutePrompt] = useState(true);
+  const [isLiveMode, setIsLiveMode] = useState(true);
+  const [videoCurrentTime, setVideoCurrentTime] = useState<number>(0);
+  const [videoDuration, setVideoDuration] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(true);
+  const activeProgramIdRef = useRef<string | null>(null);
   const [playoutState, setPlayoutState] = useState<any>(null);
   const [channelInputDigits, setChannelInputDigits] = useState('');
 
@@ -123,36 +129,88 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     return () => clearInterval(timer);
   }, [activeChannel]);
 
-  // Synchronize playback position with live broadcast offset
+  // Track current video playhead time & duration for scrubber
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !playoutState?.currentProgram) return;
+    if (!video) return;
 
-    const offset = playoutState.currentProgram.elapsedSeconds;
+    const handleTimeUpdate = () => {
+      setVideoCurrentTime(video.currentTime);
+    };
+
+    const handleDurationChange = () => {
+      setVideoDuration(video.duration || 0);
+    };
+
+    const handlePlay = () => setIsPlaying(true);
+    const handlePause = () => setIsPlaying(false);
+
+    // When the current video ends naturally, transition to the latest live playout program!
+    const handleEnded = () => {
+      console.log('[TVPlayer] Video item ended naturally. Loading next program...');
+      setIsLiveMode(true);
+      activeProgramIdRef.current = null;
+      // Force reload stream for current channel
+      if (activeChannel) {
+        loadStream(activeChannel.number);
+      }
+    };
+
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    video.addEventListener('durationchange', handleDurationChange);
+    video.addEventListener('play', handlePlay);
+    video.addEventListener('pause', handlePause);
+    video.addEventListener('ended', handleEnded);
+
+    return () => {
+      video.removeEventListener('timeupdate', handleTimeUpdate);
+      video.removeEventListener('durationchange', handleDurationChange);
+      video.removeEventListener('play', handlePlay);
+      video.removeEventListener('pause', handlePause);
+      video.removeEventListener('ended', handleEnded);
+    };
+  }, [activeChannel]);
+
+  // Synchronize playback position with live broadcast offset ONLY when in Live TV mode
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !playoutState?.currentProgram || !isLiveMode) return;
+
+    const prog = playoutState.currentProgram;
+    // Keep track of active program ID
+    if (!activeProgramIdRef.current) {
+      activeProgramIdRef.current = prog.id;
+    }
+
+    const offset = prog.elapsedSeconds;
     if (video.readyState >= 1 && video.duration > offset && offset > 3) {
-      if (Math.abs(video.currentTime - offset) > 8) {
+      if (Math.abs(video.currentTime - offset) > 10) {
         console.log(`[TVPlayer PlayoutSync] Adjusting to live offset ${offset}s (was ${video.currentTime.toFixed(1)}s)`);
         video.currentTime = offset;
       }
     }
-  }, [playoutState]);
+  }, [playoutState, isLiveMode]);
 
-  // Handle Video Stream Loading & Offset Playback
-  useEffect(() => {
-    if (!activeChannel || !videoRef.current) return;
-
+  const loadStream = (channelNumber: number) => {
     const video = videoRef.current;
-    const hlsUrl = `/channels/${activeChannel.number}/stream.m3u8`;
-    const directUrl = `/channels/${activeChannel.number}/stream`;
+    if (!video) return;
+
+    const hlsUrl = `/channels/${channelNumber}/stream.m3u8`;
+    const directUrl = `/channels/${channelNumber}/stream`;
 
     let seeksApplied = false;
 
     const applyOffset = () => {
       if (seeksApplied) return;
-      const offset = playoutState?.currentProgram?.elapsedSeconds;
-      if (offset && offset > 3 && video.duration > offset) {
-        console.log(`[TVPlayer] Seeking to start offset: ${offset}s`);
-        video.currentTime = offset;
+      // Only seek to offset if we are in live mode!
+      if (isLiveMode) {
+        const offset = playoutState?.currentProgram?.elapsedSeconds;
+        if (offset && offset > 3 && video.duration > offset) {
+          console.log(`[TVPlayer] Seeking to start offset: ${offset}s`);
+          video.currentTime = offset;
+          seeksApplied = true;
+        }
+      } else {
         seeksApplied = true;
       }
       video.play().catch(e => console.log('Autoplay prevented:', e));
@@ -166,8 +224,8 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
       applyOffset();
     };
 
-    video.addEventListener('loadedmetadata', handleLoadedMetadata);
-    video.addEventListener('canplay', handleCanPlay);
+    video.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+    video.addEventListener('canplay', handleCanPlay, { once: true });
 
     if (Hls.isSupported()) {
       if (hlsRef.current) {
@@ -204,12 +262,20 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
       video.src = directUrl;
       video.play().catch(() => {});
     }
+  };
 
+  // Handle Video Stream Loading on channel change
+  useEffect(() => {
+    if (!activeChannel) return;
+
+    // Reset scrubber / live mode on channel switch
+    setIsLiveMode(true);
+    activeProgramIdRef.current = null;
+
+    loadStream(activeChannel.number);
     triggerOSD();
 
     return () => {
-      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      video.removeEventListener('canplay', handleCanPlay);
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -279,9 +345,63 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
 
       if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
-        setIsMuted(prev => !prev);
-        if (videoRef.current) videoRef.current.muted = !isMuted;
-        triggerOSD();
+        toggleMute();
+        return;
+      }
+
+      if (e.key === ' ' || e.key === 'k') {
+        e.preventDefault();
+        togglePlayPause();
+        return;
+      }
+
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        restartFromBeginning();
+        return;
+      }
+
+      if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        jumpToLive();
+        return;
+      }
+
+      if (e.key === 'ArrowLeft' && !showGuide) {
+        // Seek backward 10s if Shift is held or in OSD, otherwise open Guide
+        if (e.shiftKey || showOSD) {
+          e.preventDefault();
+          seekDelta(-15);
+          return;
+        } else {
+          e.preventDefault();
+          setShowGuide(true);
+          return;
+        }
+      }
+
+      if (e.key === 'ArrowRight' && !showGuide) {
+        // Seek forward 15s if Shift is held or in OSD
+        if (e.shiftKey || showOSD) {
+          e.preventDefault();
+          seekDelta(15);
+          return;
+        } else {
+          e.preventDefault();
+          triggerOSD();
+          return;
+        }
+      }
+
+      if (e.key === '[' || e.key === 'j') {
+        e.preventDefault();
+        seekDelta(-15);
+        return;
+      }
+
+      if (e.key === ']' || e.key === 'l') {
+        e.preventDefault();
+        seekDelta(15);
         return;
       }
 
@@ -334,18 +454,87 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
         e.preventDefault();
         setActiveChannelIndex(prev => (prev < channels.length - 1 ? prev + 1 : 0));
         triggerOSD();
-      } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
+      } else if (e.key === 'Enter') {
         e.preventDefault();
         triggerOSD();
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        setShowGuide(true);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showGuide, guideFocusedRow, guideFocusedCol, guideData, channels, channelInputDigits, isMuted]);
+  }, [showGuide, guideFocusedRow, guideFocusedCol, guideData, channels, channelInputDigits, isMuted, showOSD, isLiveMode]);
+
+  // Player controls: Unmute, Play/Pause, Seek, Restart, Jump to Live
+  const unmuteAndPlay = () => {
+    setIsMuted(false);
+    setShowUnmutePrompt(false);
+    if (videoRef.current) {
+      videoRef.current.muted = false;
+      videoRef.current.play().catch(() => {});
+    }
+  };
+
+  const toggleMute = () => {
+    setIsMuted(prev => {
+      const next = !prev;
+      if (videoRef.current) {
+        videoRef.current.muted = next;
+      }
+      if (!next) setShowUnmutePrompt(false);
+      return next;
+    });
+    triggerOSD();
+  };
+
+  const togglePlayPause = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+    triggerOSD();
+  };
+
+  const seekDelta = (seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    setIsLiveMode(false);
+    video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
+    triggerOSD();
+  };
+
+  const restartFromBeginning = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    setIsLiveMode(false);
+    console.log('[TVPlayer] Restarting current program from beginning (0s)');
+    video.currentTime = 0;
+    video.play().catch(() => {});
+    triggerOSD();
+  };
+
+  const jumpToLive = () => {
+    const video = videoRef.current;
+    if (!video || !playoutState?.currentProgram) return;
+    setIsLiveMode(true);
+    const liveOffset = playoutState.currentProgram.elapsedSeconds;
+    console.log(`[TVPlayer] Jumping to live broadcast position (${liveOffset}s)`);
+    video.currentTime = liveOffset;
+    video.play().catch(() => {});
+    triggerOSD();
+  };
+
+  const handleScrubberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const targetTime = parseFloat(e.target.value);
+    const video = videoRef.current;
+    if (!video) return;
+    setIsLiveMode(false);
+    video.currentTime = targetTime;
+    setVideoCurrentTime(targetTime);
+    triggerOSD();
+  };
 
   // Keep focused program visible in guide scroll
   useEffect(() => {
@@ -409,8 +598,22 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
         autoPlay
         playsInline
         muted={isMuted}
+        onClick={triggerOSD}
         className="w-full h-full object-contain bg-black"
       />
+
+      {/* Prominent Tap to Unmute Overlay */}
+      {isMuted && showUnmutePrompt && (
+        <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-40 animate-bounce">
+          <button
+            onClick={unmuteAndPlay}
+            className="flex items-center gap-2.5 px-5 py-2.5 rounded-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm shadow-2xl shadow-cyan-500/50 backdrop-blur transition-all"
+          >
+            <VolumeX className="w-5 h-5 text-slate-950 animate-pulse" />
+            <span>Click or Press [M] to Unmute</span>
+          </button>
+        </div>
+      )}
 
       {/* Top Floating Station Bug & Exit Button */}
       <div className="absolute top-6 left-6 right-6 flex items-center justify-between z-30 pointer-events-none">
@@ -428,6 +631,25 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
               {channelInputDigits}
             </div>
           )}
+
+          {/* Volume Mute Toggle Badge */}
+          <button
+            onClick={toggleMute}
+            className="pointer-events-auto px-3 py-1.5 rounded-xl bg-slate-950/70 hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white backdrop-blur flex items-center gap-1.5 transition-all text-xs font-semibold"
+            title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
+          >
+            {isMuted ? (
+              <>
+                <VolumeX className="w-4 h-4 text-amber-400" />
+                <span className="text-amber-400">Muted</span>
+              </>
+            ) : (
+              <>
+                <Volume2 className="w-4 h-4 text-cyan-400" />
+                <span>Audio</span>
+              </>
+            )}
+          </button>
 
           {activeChannel && (
             <div className="px-3.5 py-1.5 rounded-xl bg-slate-950/70 border border-slate-800/80 backdrop-blur flex items-center gap-2.5">
@@ -462,8 +684,12 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
           <div className="flex-1 min-w-0 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 flex-wrap min-w-0">
-                <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-bold text-[10px] uppercase tracking-wider border border-cyan-500/30">
-                  Now Playing
+                <span className={`px-2 py-0.5 rounded font-bold text-[10px] uppercase tracking-wider border ${
+                  isLiveMode 
+                    ? 'bg-red-500/20 text-red-300 border-red-500/30' 
+                    : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                }`}>
+                  {isLiveMode ? '● LIVE TV' : '⟲ WATCHING REPLAY'}
                 </span>
                 {curProg?.seriesName && (
                   <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold text-[11px] uppercase tracking-wider border border-purple-500/40">
@@ -488,9 +714,11 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                 )}
               </div>
 
-              <span className="hidden sm:inline-block text-[11px] text-slate-400 font-mono">
-                Press <kbd className="px-1.5 py-0.5 bg-slate-800 rounded border border-slate-700 text-white font-bold">G</kbd> for Guide
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline-block text-[11px] text-slate-400 font-mono">
+                  Press <kbd className="px-1.5 py-0.5 bg-slate-800 rounded border border-slate-700 text-white font-bold">G</kbd> for Guide
+                </span>
+              </div>
             </div>
 
             {curProg?.overview && (
@@ -499,20 +727,79 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
               </p>
             )}
 
-            {curProg && (
-              <div className="space-y-1 pt-1">
-                <div className="w-full bg-slate-800/80 rounded-full h-2 overflow-hidden border border-slate-700/50">
-                  <div
-                    className="bg-cyan-400 h-full rounded-full transition-all duration-1000"
-                    style={{ width: `${curProg.progressPercentage}%` }}
-                  />
+            {/* Interactive Timeline Scrubber & Quick Actions */}
+            <div className="space-y-1.5 pt-2">
+              <div className="relative flex items-center group">
+                <input
+                  type="range"
+                  min={0}
+                  max={videoDuration || curProg?.duration || 100}
+                  value={videoCurrentTime || curProg?.elapsedSeconds || 0}
+                  onChange={handleScrubberChange}
+                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-400/50"
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                <div className="flex items-center gap-2">
+                  <span>{formatSeconds(videoCurrentTime || curProg?.elapsedSeconds)}</span>
+                  <span>/</span>
+                  <span>{formatSeconds(videoDuration || curProg?.duration)}</span>
                 </div>
-                <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                  <span>{formatSeconds(curProg.elapsedSeconds)}</span>
-                  <span>{formatSeconds(curProg.duration)}</span>
+
+                {/* Scrubber Action Buttons */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={togglePlayPause}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all text-[11px] font-semibold"
+                    title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+                  >
+                    {isPlaying ? (
+                      <Pause className="w-3.5 h-3.5 text-cyan-400" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5 text-cyan-400 fill-current" />
+                    )}
+                    <span>{isPlaying ? 'Pause' : 'Play'}</span>
+                  </button>
+
+                  <button
+                    onClick={restartFromBeginning}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all text-[11px] font-semibold"
+                    title="Watch from Start (R)"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Watch from Start</span>
+                  </button>
+
+                  <button
+                    onClick={() => seekDelta(-15)}
+                    className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all text-[11px]"
+                    title="Rewind 15s ([ / Shift+◄)"
+                  >
+                    -15s
+                  </button>
+
+                  <button
+                    onClick={() => seekDelta(15)}
+                    className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all text-[11px]"
+                    title="Forward 15s (] / Shift+►)"
+                  >
+                    +15s
+                  </button>
+
+                  {!isLiveMode && (
+                    <button
+                      onClick={jumpToLive}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-950/80 hover:bg-red-900 border border-red-800 text-red-200 hover:text-white transition-all text-[11px] font-bold animate-pulse"
+                      title="Jump back to Live Broadcast (L)"
+                    >
+                      <FastForward className="w-3.5 h-3.5" />
+                      <span>Jump to Live</span>
+                    </button>
+                  )}
                 </div>
               </div>
-            )}
+            </div>
 
             {playoutState?.nextProgram && (
               <div className="pt-2 border-t border-slate-800/80 text-xs text-slate-400 flex items-center gap-2 flex-wrap">
