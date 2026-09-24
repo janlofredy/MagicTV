@@ -71,7 +71,7 @@ export class AutoChannelService {
             data: {
               number: channelNumber,
               name: channelName,
-              description: 'The flagship Magic TV broadcast: Afternoon & Primetime Movies, TV Series Marathons during daytime, and Off-Air overnight (1 AM - 4 AM).',
+              description: 'The flagship Magic TV broadcast: Daytime Daily TV Show Rotations (1 episode per day), Lunch & Primetime Movies, and Overnight Off-Air (1 AM - 4 AM).',
               groupTitle: 'General Entertainment',
               type: 'mixed',
               playMode: 'sequential',
@@ -87,10 +87,10 @@ export class AutoChannelService {
                     type: 'off_air',
                   },
                   {
-                    name: 'Morning Series Marathon',
+                    name: 'Morning Daily TV Rotation',
                     startHour: 4,
                     endHour: 12,
-                    type: 'series_marathon',
+                    type: 'daily_rotation',
                   },
                   {
                     name: 'Lunch Movie Matinee',
@@ -99,10 +99,10 @@ export class AutoChannelService {
                     type: 'movie',
                   },
                   {
-                    name: 'Afternoon Series Marathon',
+                    name: 'Afternoon Daily TV Rotation',
                     startHour: 14,
                     endHour: 20,
-                    type: 'series_marathon',
+                    type: 'daily_rotation',
                   },
                   {
                     name: 'Primetime Feature Movies',

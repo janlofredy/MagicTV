@@ -62,9 +62,9 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
   const applyDefaultMixedBlocks = () => {
     setTimeBlocks([
       { name: 'Overnight Off-Air', startHour: 1, endHour: 4, type: 'off_air' },
-      { name: 'Morning Shows Marathon', startHour: 4, endHour: 12, type: 'series_marathon' },
+      { name: 'Morning TV Rotation', startHour: 4, endHour: 12, type: 'daily_rotation' },
       { name: 'Lunch Movie Matinee', startHour: 12, endHour: 14, type: 'movie' },
-      { name: 'Afternoon Shows Marathon', startHour: 14, endHour: 20, type: 'series_marathon' },
+      { name: 'Afternoon TV Rotation', startHour: 14, endHour: 20, type: 'daily_rotation' },
       { name: 'Primetime Feature Movies', startHour: 20, endHour: 1, type: 'movie' },
     ]);
     setChannelType('mixed');
@@ -507,9 +507,10 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
                           onChange={e => updateTimeBlock(idx, 'type', e.target.value)}
                           className="bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-cyan-300 font-semibold focus:outline-none focus:border-cyan-500"
                         >
-                          <option value="movie">Movies</option>
+                          <option value="daily_rotation">Daily TV Rotation (1 Ep/Day)</option>
                           <option value="series_marathon">TV Series Marathon (Sequential)</option>
-                          <option value="off_air">Off-Air (Sleep / Standby)</option>
+                          <option value="movie">Movies</option>
+                          <option value="off_air">Off-Air (Sleep / Blank)</option>
                         </select>
                       </div>
 

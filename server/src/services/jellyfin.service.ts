@@ -251,8 +251,10 @@ export class JellyfinService {
     const bitrateParam = maxBitrate ? `&MaxStreamingBitrate=${maxBitrate}` : '';
 
     if (preferHls) {
-      // Jellyfin requires MediaSourceId parameter, otherwise returns 400 Bad Request
-      return `${cleanUrl}/Videos/${itemId}/master.m3u8?MediaSourceId=${itemId}&StartTimeTicks=${ticks}&api_key=${token}&PlaySessionId=MagicTV-${Date.now()}${bitrateParam}`;
+      // Jellyfin requires MediaSourceId parameter, otherwise returns 400 Bad Request.
+      // We pass AllowVideoStreamCopy=true and AllowAudioStreamCopy=true along with supported web codecs
+      // so Jellyfin performs near-instant Direct Stream / remuxing into HLS TS segments instead of heavy CPU transcoding.
+      return `${cleanUrl}/Videos/${itemId}/master.m3u8?MediaSourceId=${itemId}&StartTimeTicks=${ticks}&AllowVideoStreamCopy=true&AllowAudioStreamCopy=true&BreakOnNonKeyFrames=true&SegmentContainer=ts&VideoCodec=h264,hevc,vp9,av1&AudioCodec=aac,mp3,ac3,eac3,opus,flac&api_key=${token}&PlaySessionId=MagicTV-${Date.now()}${bitrateParam}`;
     }
 
     if (maxBitrate) {

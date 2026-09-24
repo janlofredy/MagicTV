@@ -268,31 +268,40 @@ export class SchedulerService {
     let currentSeriesIndex = 0;
     let currentSeriesEpIndex = 0;
 
-    // If channel has existing schedules, find the last played episode and series to maintain continuity
-    const lastProgram = await prisma.programSchedule.findFirst({
-      where: { channelId },
-      orderBy: { endTime: 'desc' },
+    // Per-series episode tracking for daily rotation and continuity
+    const seriesEpTracker = new Map<string, number>();
+    for (const name of seriesNames) {
+      seriesEpTracker.set(name, 0);
+    }
+
+    // Inspect existing program schedule to restore the latest episode played for each series
+    const recentEpisodeSchedules = await prisma.programSchedule.findMany({
+      where: {
+        channelId,
+        mediaItem: { type: 'episode' },
+      },
+      orderBy: { startTime: 'desc' },
+      take: 100,
       include: { mediaItem: true },
     });
 
-    if (lastProgram?.mediaItem?.type === 'episode' && lastProgram.mediaItem.seriesName) {
-      const lastSeriesName = lastProgram.mediaItem.seriesName;
-      const sIdx = seriesNames.indexOf(lastSeriesName);
-      if (sIdx !== -1) {
-        currentSeriesIndex = sIdx;
-        const epList = seriesMap.get(lastSeriesName) || [];
-        const epIdx = epList.findIndex(e => e.id === lastProgram.mediaItemId);
-        if (epIdx !== -1) {
-          // Advance to the next episode
-          currentSeriesEpIndex = epIdx + 1;
-          if (currentSeriesEpIndex >= epList.length) {
-            // Series completed, rotate to next series!
-            currentSeriesIndex = (currentSeriesIndex + 1) % seriesNames.length;
-            currentSeriesEpIndex = 0;
+    const seriesLastSeenTime = new Map<string, Date>();
+    for (const sched of recentEpisodeSchedules) {
+      const sName = sched.mediaItem.seriesName;
+      if (sName && seriesMap.has(sName)) {
+        if (!seriesLastSeenTime.has(sName)) {
+          seriesLastSeenTime.set(sName, sched.startTime);
+          const epList = seriesMap.get(sName)!;
+          const foundIdx = epList.findIndex(e => e.id === sched.mediaItemId);
+          if (foundIdx !== -1) {
+            seriesEpTracker.set(sName, (foundIdx + 1) % epList.length);
           }
         }
       }
     }
+
+    // Daily rotation slot counter per calendar day (dayKey string -> count of scheduled shows that day)
+    const dailySlotTracker = new Map<string, number>();
 
     const now = new Date();
     const horizon = new Date(now.getTime() + hoursAhead * 60 * 60 * 1000);
@@ -331,28 +340,46 @@ export class SchedulerService {
 
     while (currentStartTime < horizon) {
       let chosenItem: MediaItem | null = null;
-      let isOffAirBlock = false;
-      let nextSlotEnd: Date | null = null;
 
       if (hasTimeBlocks && rules.timeBlocks) {
         const hour = currentStartTime.getHours();
         const activeBlock = rules.timeBlocks.find(b => this.isHourInBlock(hour, b.startHour, b.endHour));
 
         if (activeBlock) {
-          if (activeBlock.type === 'off_air') {
-            isOffAirBlock = true;
-            // Calculate how long off-air lasts until endHour
+          if (activeBlock.type === 'daily_rotation' && seriesNames.length > 0) {
+            // Daily rotation: 1 episode per TV show per day.
+            // Day identifier based on calendar date (YYYY-MM-DD) in local time
+            const dayKey = `${currentStartTime.getFullYear()}-${String(currentStartTime.getMonth() + 1).padStart(2, '0')}-${String(currentStartTime.getDate()).padStart(2, '0')}`;
+            const slotIndexToday = dailySlotTracker.get(dayKey) || 0;
+            dailySlotTracker.set(dayKey, slotIndexToday + 1);
+
+            // Select show for this slot today
+            const seriesIndex = slotIndexToday % seriesNames.length;
+            const currentShowName = seriesNames[seriesIndex];
+            const epList = seriesMap.get(currentShowName) || [];
+
+            if (epList.length > 0) {
+              const currentEpIdx = seriesEpTracker.get(currentShowName) || 0;
+              chosenItem = epList[currentEpIdx % epList.length];
+
+              // Advance episode tracker for this show for tomorrow
+              seriesEpTracker.set(currentShowName, (currentEpIdx + 1) % epList.length);
+            }
+          } else if (activeBlock.type === 'off_air') {
+            // Off-air block: intentionally leave blank/gap (no programs scheduled)
             const blockEnd = new Date(currentStartTime);
             if (activeBlock.endHour > activeBlock.startHour) {
               blockEnd.setHours(activeBlock.endHour, 0, 0, 0);
             } else {
-              // Wrap midnight
+              // Wraps midnight (e.g. 1 AM to 4 AM, or 23:00 to 04:00)
               if (hour >= activeBlock.startHour) {
                 blockEnd.setDate(blockEnd.getDate() + 1);
               }
               blockEnd.setHours(activeBlock.endHour, 0, 0, 0);
             }
-            nextSlotEnd = blockEnd;
+            // Advance timeline to end of off-air block without scheduling anything
+            currentStartTime = blockEnd;
+            continue;
           } else if (activeBlock.type === 'movie' && moviePool.length > 0) {
             let matchedMovies = moviePool;
             if (activeBlock.genres && activeBlock.genres.length > 0) {
@@ -385,12 +412,6 @@ export class SchedulerService {
         }
       }
 
-      // If off air: skip forward to blockEnd without scheduling media items
-      if (isOffAirBlock && nextSlotEnd) {
-        currentStartTime = new Date(nextSlotEnd);
-        continue;
-      }
-
       // Fallback if not in a special block or no item was selected
       if (!chosenItem) {
         chosenItem = items[itemIndex % items.length];
@@ -405,6 +426,24 @@ export class SchedulerService {
         endTime = new Date(currentStartTime.getTime() + slotSeconds * 1000);
       } else {
         endTime = new Date(currentStartTime.getTime() + duration * 1000);
+      }
+
+      // If there is an upcoming off_air block, don't let this item overrun past the off-air start
+      if (hasTimeBlocks && rules.timeBlocks) {
+        const offAirBlocks = rules.timeBlocks.filter(b => b.type === 'off_air');
+        for (const oBlock of offAirBlocks) {
+          const nextOffAirStart = new Date(currentStartTime);
+          if (oBlock.startHour > currentStartTime.getHours()) {
+            nextOffAirStart.setHours(oBlock.startHour, 0, 0, 0);
+          } else {
+            nextOffAirStart.setDate(nextOffAirStart.getDate() + 1);
+            nextOffAirStart.setHours(oBlock.startHour, 0, 0, 0);
+          }
+
+          if (endTime > nextOffAirStart && currentStartTime < nextOffAirStart) {
+            endTime = nextOffAirStart;
+          }
+        }
       }
 
       const formattedTitle = chosenItem.type === 'episode' && chosenItem.seriesName

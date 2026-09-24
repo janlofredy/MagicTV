@@ -3,7 +3,7 @@ export interface TimeBlock {
   name?: string;
   startHour: number; // 0 - 23 (e.g. 1 for 1 AM)
   endHour: number;   // 0 - 23 (e.g. 4 for 4 AM)
-  type: 'movie' | 'series_marathon' | 'off_air';
+  type: 'movie' | 'series_marathon' | 'daily_rotation' | 'off_air';
   genres?: string[];
 }
 

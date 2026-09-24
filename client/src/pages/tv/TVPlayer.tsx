@@ -259,6 +259,11 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
         enableWorker: true,
         lowLatencyMode: false,
         backBufferLength: 30,
+        maxBufferLength: 10,
+        maxMaxBufferLength: 30,
+        maxBufferSize: 30 * 1000 * 1000,
+        maxBufferHole: 0.5,
+        startFragPrefetch: true,
       });
 
       hlsRef.current = hls;
