@@ -64,6 +64,9 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
   const digitTimerRef = useRef<any>(null);
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const programRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  // Tracks the movie-position offset (in seconds) at which the current HLS stream was loaded.
+  // The HLS stream's time 0 corresponds to this position in the movie.
+  const loadedOffsetRef = useRef<number>(0);
 
   const activeChannel = channels[activeChannelIndex];
 
@@ -174,29 +177,45 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     };
   }, [activeChannel]);
 
-  // Synchronize playback position with live broadcast offset ONLY when in Live TV mode
+  // Synchronize playback position with live broadcast offset ONLY when in Live TV mode.
+  // The HLS stream starts at loadedOffsetRef.current, so video.currentTime=0 already
+  // corresponds to elapsedSeconds at load time. We only correct for drift > 30s.
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !playoutState?.currentProgram || !isLiveMode) return;
 
     const prog = playoutState.currentProgram;
-    // Keep track of active program ID
     if (!activeProgramIdRef.current) {
       activeProgramIdRef.current = prog.id;
     }
 
-    const offset = prog.elapsedSeconds;
-    if (video.readyState >= 1 && video.duration > offset && offset > 3) {
-      if (Math.abs(video.currentTime - offset) > 10) {
-        console.log(`[TVPlayer PlayoutSync] Adjusting to live offset ${offset}s (was ${video.currentTime.toFixed(1)}s)`);
-        video.currentTime = offset;
-      }
+    // Expected HLS position = how much time has passed since we loaded the stream
+    const expectedHlsTime = prog.elapsedSeconds - loadedOffsetRef.current;
+    if (
+      expectedHlsTime >= 0 &&
+      video.readyState >= 1 &&
+      video.duration > expectedHlsTime &&
+      Math.abs(video.currentTime - expectedHlsTime) > 30
+    ) {
+      console.log(`[TVPlayer PlayoutSync] Drift ${(video.currentTime - expectedHlsTime).toFixed(0)}s — correcting to HLS time ${expectedHlsTime.toFixed(0)}s`);
+      video.currentTime = expectedHlsTime;
     }
   }, [playoutState, isLiveMode]);
 
   const loadStream = (channelNumber: number, customOffset?: number, quality: string = selectedQuality) => {
     const video = videoRef.current;
     if (!video) return;
+
+    // Record where in the movie this stream starts.
+    // For custom offsets the caller knows exactly. For live mode, the server embeds
+    // StartTimeTicks = elapsedSeconds into the HLS URL, so the stream's t=0 already
+    // corresponds to that position in the movie.
+    if (customOffset !== undefined) {
+      loadedOffsetRef.current = customOffset;
+    } else {
+      // Live mode: capture current elapsedSeconds as the load-time offset
+      loadedOffsetRef.current = playoutState?.currentProgram?.elapsedSeconds ?? 0;
+    }
 
     const params = new URLSearchParams();
     if (customOffset !== undefined) {
@@ -210,37 +229,19 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     const hlsUrl = `/channels/${channelNumber}/stream.m3u8${queryString}`;
     const directUrl = `/channels/${channelNumber}/stream${queryString}`;
 
-    let seeksApplied = false;
+    let started = false;
 
-    const applyOffset = () => {
-      if (seeksApplied) return;
-      if (customOffset !== undefined) {
-        // If stream was reloaded with a custom offset (e.g. 0 for start), video playhead starts at 0 or custom offset
-        video.currentTime = 0;
-        seeksApplied = true;
-      } else if (isLiveMode) {
-        const offset = playoutState?.currentProgram?.elapsedSeconds;
-        if (offset && offset > 3 && video.duration > offset) {
-          console.log(`[TVPlayer] Seeking to start offset: ${offset}s`);
-          video.currentTime = offset;
-          seeksApplied = true;
-        }
-      } else {
-        seeksApplied = true;
-      }
+    const startPlayback = () => {
+      if (started) return;
+      started = true;
+      // The HLS stream already starts at the correct movie position (via StartTimeTicks).
+      // Do NOT seek — seeking would double-offset and cause massive buffering delay.
+      video.currentTime = 0;
       video.play().catch(e => console.log('Autoplay prevented:', e));
     };
 
-    const handleLoadedMetadata = () => {
-      applyOffset();
-    };
-
-    const handleCanPlay = () => {
-      applyOffset();
-    };
-
-    video.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
-    video.addEventListener('canplay', handleCanPlay, { once: true });
+    video.addEventListener('loadedmetadata', startPlayback, { once: true });
+    video.addEventListener('canplay', startPlayback, { once: true });
 
     if (Hls.isSupported()) {
       if (hlsRef.current) {
@@ -258,7 +259,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        applyOffset();
+        startPlayback();
       });
 
       hls.on(Hls.Events.ERROR, (_, data) => {
@@ -267,7 +268,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
           hls.destroy();
           hlsRef.current = null;
           video.src = directUrl;
-          applyOffset();
+          startPlayback();
         }
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -561,37 +562,42 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     if (isLiveMode) {
       loadStream(activeChannel.number, undefined, newQuality);
     } else {
-      loadStream(activeChannel.number, currentPos || 0, newQuality);
+      const moviePos = loadedOffsetRef.current + (currentPos || 0);
+      loadStream(activeChannel.number, moviePos, newQuality);
     }
     triggerOSD();
   };
 
   const handleScrubberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const targetTime = parseFloat(e.target.value);
+    // Scrubber operates in movie-position space (0 → full movie duration)
+    const moviePos = parseFloat(e.target.value);
     const video = videoRef.current;
     if (!video) return;
     setIsLiveMode(false);
-    setVideoCurrentTime(targetTime);
+    // Store as HLS-relative time for internal consistency
+    setVideoCurrentTime(Math.max(0, moviePos - loadedOffsetRef.current));
   };
 
   const handleScrubberCommit = (e: React.MouseEvent<HTMLInputElement> | React.TouchEvent<HTMLInputElement>) => {
-    const targetTime = parseFloat((e.currentTarget as HTMLInputElement).value);
+    const moviePos = parseFloat((e.currentTarget as HTMLInputElement).value);
     const video = videoRef.current;
     if (!video || !activeChannel) return;
     setIsLiveMode(false);
 
-    // If seeking near 0, reload stream from beginning
-    if (targetTime <= 5) {
-      restartFromBeginning();
+    // Convert movie position to HLS-relative time
+    const hlsTime = moviePos - loadedOffsetRef.current;
+
+    // Seeking before the HLS stream start → reload from the target position
+    if (hlsTime < 0 || moviePos <= 5) {
+      loadStream(activeChannel.number, Math.max(0, moviePos), selectedQuality);
       return;
     }
 
-    // Try setting currentTime directly
     try {
-      video.currentTime = targetTime;
+      video.currentTime = hlsTime;
+      setVideoCurrentTime(hlsTime);
     } catch {
-      // Fallback reload from server with offset
-      loadStream(activeChannel.number, targetTime, selectedQuality);
+      loadStream(activeChannel.number, moviePos, selectedQuality);
     }
     triggerOSD();
   };
@@ -797,8 +803,8 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                 <input
                   type="range"
                   min={0}
-                  max={videoDuration || curProg?.duration || 100}
-                  value={videoCurrentTime || curProg?.elapsedSeconds || 0}
+                  max={curProg?.duration || (loadedOffsetRef.current + videoDuration) || 100}
+                  value={loadedOffsetRef.current + videoCurrentTime}
                   onChange={handleScrubberChange}
                   onMouseUp={handleScrubberCommit}
                   onTouchEnd={handleScrubberCommit}
@@ -808,9 +814,9 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
 
               <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
                 <div className="flex items-center gap-2">
-                  <span>{formatSeconds(videoCurrentTime || curProg?.elapsedSeconds)}</span>
+                  <span>{formatSeconds(loadedOffsetRef.current + videoCurrentTime)}</span>
                   <span>/</span>
-                  <span>{formatSeconds(videoDuration || curProg?.duration)}</span>
+                  <span>{formatSeconds(curProg?.duration || loadedOffsetRef.current + videoDuration)}</span>
                 </div>
 
                 {/* Scrubber Action Buttons */}
