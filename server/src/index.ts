@@ -1,6 +1,15 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// Ensure DATABASE_URL fallback before Prisma initialization
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = 'file:./dev.db';
+}
+
+if (process.env.TZ) {
+  process.env.TZ = process.env.TZ;
+}
+
 import express from 'express';
 import cors from 'cors';
 import path from 'path';

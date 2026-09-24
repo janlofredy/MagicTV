@@ -531,8 +531,8 @@ export class SchedulerService {
       orderBy: { startTime: 'asc' },
     });
 
-    const baseUrl = process.env.BASE_URL || 'http://localhost:8000';
-    let streamUrl = `${baseUrl}/channels/${channel.number}/stream.m3u8`;
+    const baseUrl = process.env.BASE_URL || '';
+    const streamUrl = baseUrl ? `${baseUrl}/channels/${channel.number}/stream.m3u8` : `/channels/${channel.number}/stream.m3u8`;
 
     if (!currentSchedule) {
       let isOffAir = false;

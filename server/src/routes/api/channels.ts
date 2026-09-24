@@ -31,7 +31,8 @@ router.get('/', async (req, res) => {
     });
 
     const now = new Date();
-    const baseUrl = process.env.BASE_URL || 'http://localhost:8000';
+    const host = req.get('host');
+    const baseUrl = process.env.BASE_URL || (host ? `${req.protocol}://${host}` : 'http://localhost:8000');
 
     // Batch fetch all active/current schedules across channels in a single query
     const currentSchedules = await prisma.programSchedule.findMany({

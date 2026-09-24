@@ -24,8 +24,8 @@ ENV NODE_ENV=production
 ENV PORT=8000
 ENV DATABASE_URL="file:/data/magictv.db"
 
-# Install OpenSSL for Prisma engine on Alpine
-RUN apk add --no-cache openssl libc6-compat && mkdir -p /data
+# Install OpenSSL and tzdata for Prisma engine and timezone support on Alpine
+RUN apk add --no-cache openssl libc6-compat tzdata && mkdir -p /data
 
 COPY package*.json ./
 COPY server/package*.json ./server/
