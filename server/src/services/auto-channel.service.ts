@@ -36,6 +36,7 @@ export class AutoChannelService {
       select: { id: true, number: true, name: true },
     });
 
+    const existingNumbers = new Set(existingChannels.map(c => c.number));
     let nextNumber = existingChannels.length > 0
       ? Math.max(...existingChannels.map(c => c.number)) + 1
       : 1;
@@ -43,19 +44,34 @@ export class AutoChannelService {
     const existingNames = new Set(existingChannels.map(c => c.name.toLowerCase().trim()));
     const createdNames: string[] = [];
 
-    // 1. Mixed Block Channels (Movies, Series Marathon & Overnight Off-Air)
+    // Helper to get lowest available number, preferring 1
+    const getAvailableChannelNumber = (preferred: number = 1): number => {
+      if (!existingNumbers.has(preferred)) {
+        existingNumbers.add(preferred);
+        return preferred;
+      }
+      while (existingNumbers.has(nextNumber)) {
+        nextNumber++;
+      }
+      const chosen = nextNumber++;
+      existingNumbers.add(chosen);
+      return chosen;
+    };
+
+    // 1. Flagship Magic TV Channel: Mixed Block (Movies, Series Marathon & Overnight Off-Air)
     if (createMixedBlockChannels) {
       const movieCount = await prisma.mediaItem.count({ where: { type: 'movie' } });
       const episodeCount = await prisma.mediaItem.count({ where: { type: 'episode' } });
 
-      if (movieCount > 0 && episodeCount > 0) {
-        const channelName = 'Cinema & Series Network';
+      if (movieCount > 0 || episodeCount > 0) {
+        const channelName = 'Magic TV';
         if (!existingNames.has(channelName.toLowerCase())) {
+          const channelNumber = getAvailableChannelNumber(1);
           const newChannel = await prisma.channel.create({
             data: {
-              number: nextNumber++,
+              number: channelNumber,
               name: channelName,
-              description: 'Mixed programming: Afternoon & Primetime Movies, TV Series Marathons during daytime, and Off-Air overnight (1 AM - 4 AM).',
+              description: 'The flagship Magic TV broadcast: Afternoon & Primetime Movies, TV Series Marathons during daytime, and Off-Air overnight (1 AM - 4 AM).',
               groupTitle: 'General Entertainment',
               type: 'mixed',
               playMode: 'sequential',
@@ -150,7 +166,7 @@ export class AutoChannelService {
 
         const newChannel = await prisma.channel.create({
           data: {
-            number: nextNumber++,
+            number: getAvailableChannelNumber(),
             name: channelName,
             description: `24/7 dedicated broadcast of ${name} (${info.count} episodes)`,
             logoUrl: info.poster || null,
@@ -196,7 +212,7 @@ export class AutoChannelService {
         const isSeries = lib.type === 'tvshows';
         const newChannel = await prisma.channel.create({
           data: {
-            number: nextNumber++,
+            number: getAvailableChannelNumber(),
             name: channelName,
             description: `All content from ${lib.name} library (${count} items)`,
             groupTitle: 'Libraries',
@@ -250,7 +266,7 @@ export class AutoChannelService {
 
         const newChannel = await prisma.channel.create({
           data: {
-            number: nextNumber++,
+            number: getAvailableChannelNumber(),
             name: channelName,
             description: `Non-stop ${genre} movies and entertainment (${count} titles)`,
             groupTitle: 'Genres',
@@ -305,7 +321,7 @@ export class AutoChannelService {
 
         const newChannel = await prisma.channel.create({
           data: {
-            number: nextNumber++,
+            number: getAvailableChannelNumber(),
             name: channelName,
             description: `Curated programming from ${studio} (${count} titles)`,
             groupTitle: 'Studios',
