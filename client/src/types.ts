@@ -61,6 +61,32 @@ export interface ProgramInfo {
   progressPercentage: number;
 }
 
+export interface TimeBlock {
+  id?: string;
+  name?: string;
+  startHour: number; // 0 - 23 (e.g. 1 for 1 AM)
+  endHour: number;   // 0 - 23 (e.g. 4 for 4 AM)
+  type: 'movie' | 'series_marathon' | 'off_air';
+  genres?: string[];
+}
+
+export interface ChannelRules {
+  type?: 'movie' | 'episode' | 'all';
+  genres?: string[];
+  genresOperator?: 'AND' | 'OR';
+  minYear?: number;
+  maxYear?: number;
+  minRating?: number;
+  directors?: string[];
+  studios?: string[];
+  collections?: string[];
+  seriesNames?: string[];
+  libraries?: string[];
+  sortBy?: 'random' | 'year_asc' | 'year_desc' | 'title' | 'rating' | 'episode_asc';
+  limit?: number;
+  timeBlocks?: TimeBlock[];
+}
+
 export interface Channel {
   id: string;
   number: number;
@@ -91,6 +117,7 @@ export interface Channel {
     posterUrl?: string | null;
   } | null;
   streamUrl?: string;
+  isOffAir?: boolean;
 }
 
 export interface ScheduleProgram {

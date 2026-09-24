@@ -6,6 +6,7 @@ export interface AutoChannelOptions {
   createLibraryChannels?: boolean;
   createGenreChannels?: boolean;
   createStudioChannels?: boolean;
+  createMixedBlockChannels?: boolean;
 }
 
 export interface AutoChannelResult {
@@ -16,10 +17,11 @@ export interface AutoChannelResult {
 export class AutoChannelService {
   /**
    * Automatically generate channels QuasiTV style based on media origin:
-   * 1. Dedicated 24/7 channels per TV series (playing sequential S01E01 -> S01E02...)
-   * 2. Dedicated channels per media library (e.g. Movies, TV Shows)
-   * 3. Dedicated channels for popular genres
-   * 4. Dedicated channels for top studios
+   * 1. Mixed Time-Block Channels (Movies prime/matinee, Series binges in daytime, Off-Air overnight)
+   * 2. Dedicated 24/7 channels per TV series (playing sequential S01E01 -> S01E02...)
+   * 3. Dedicated channels per media library (e.g. Movies, TV Shows)
+   * 4. Dedicated channels for popular genres
+   * 5. Dedicated channels for top studios
    */
   static async generateChannels(options: AutoChannelOptions = {}): Promise<AutoChannelResult> {
     const {
@@ -27,6 +29,7 @@ export class AutoChannelService {
       createLibraryChannels = true,
       createGenreChannels = true,
       createStudioChannels = true,
+      createMixedBlockChannels = true,
     } = options;
 
     const existingChannels = await prisma.channel.findMany({
@@ -40,7 +43,71 @@ export class AutoChannelService {
     const existingNames = new Set(existingChannels.map(c => c.name.toLowerCase().trim()));
     const createdNames: string[] = [];
 
-    // 1. TV Series dedicated channels (Sequential playout)
+    // 1. Mixed Block Channels (Movies, Series Marathon & Overnight Off-Air)
+    if (createMixedBlockChannels) {
+      const movieCount = await prisma.mediaItem.count({ where: { type: 'movie' } });
+      const episodeCount = await prisma.mediaItem.count({ where: { type: 'episode' } });
+
+      if (movieCount > 0 && episodeCount > 0) {
+        const channelName = 'Cinema & Series Network';
+        if (!existingNames.has(channelName.toLowerCase())) {
+          const newChannel = await prisma.channel.create({
+            data: {
+              number: nextNumber++,
+              name: channelName,
+              description: 'Mixed programming: Afternoon & Primetime Movies, TV Series Marathons during daytime, and Off-Air overnight (1 AM - 4 AM).',
+              groupTitle: 'General Entertainment',
+              type: 'mixed',
+              playMode: 'sequential',
+              mode: 'continuous',
+              shuffle: false,
+              rules: JSON.stringify({
+                type: 'all',
+                timeBlocks: [
+                  {
+                    name: 'Overnight Off-Air',
+                    startHour: 1,
+                    endHour: 4,
+                    type: 'off_air',
+                  },
+                  {
+                    name: 'Morning Series Marathon',
+                    startHour: 4,
+                    endHour: 12,
+                    type: 'series_marathon',
+                  },
+                  {
+                    name: 'Lunch Movie Matinee',
+                    startHour: 12,
+                    endHour: 14,
+                    type: 'movie',
+                  },
+                  {
+                    name: 'Afternoon Series Marathon',
+                    startHour: 14,
+                    endHour: 20,
+                    type: 'series_marathon',
+                  },
+                  {
+                    name: 'Primetime Feature Movies',
+                    startHour: 20,
+                    endHour: 1,
+                    type: 'movie',
+                  },
+                ],
+              }),
+              enabled: true,
+            },
+          });
+
+          existingNames.add(channelName.toLowerCase());
+          createdNames.push(channelName);
+          await SchedulerService.ensureSchedule(newChannel.id, 48);
+        }
+      }
+    }
+
+    // 2. TV Series dedicated channels (Sequential playout)
     if (createSeriesChannels) {
       // Find all distinct series in database
       const episodes = await prisma.mediaItem.findMany({

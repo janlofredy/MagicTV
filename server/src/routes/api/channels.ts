@@ -123,11 +123,30 @@ router.get('/', async (req, res) => {
         };
       }
 
+      let isOffAir = false;
+      if (!currentProgram && ch.rules) {
+        try {
+          const rules = JSON.parse(ch.rules);
+          if (rules.timeBlocks && Array.isArray(rules.timeBlocks)) {
+            const h = now.getHours();
+            isOffAir = rules.timeBlocks.some((b: any) => {
+              if (b.type !== 'off_air') return false;
+              if (b.startHour <= b.endHour) {
+                return h >= b.startHour && h < b.endHour;
+              } else {
+                return h >= b.startHour || h < b.endHour;
+              }
+            });
+          }
+        } catch {}
+      }
+
       return {
         ...ch,
         currentProgram,
         nextProgram,
         streamUrl: `${baseUrl}/channels/${ch.number}/stream.m3u8`,
+        isOffAir,
       };
     });
 

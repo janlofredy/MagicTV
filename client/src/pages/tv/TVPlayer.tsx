@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Channel } from '../../types.js';
 import Hls from 'hls.js';
-import { ArrowLeft, Tv, Clock, Radio, Sparkles, Volume2, VolumeX, RotateCcw, FastForward, Play, Pause, Sliders, Settings } from 'lucide-react';
+import { ArrowLeft, Tv, Clock, Radio, Sparkles, Volume2, VolumeX, RotateCcw, FastForward, Play, Pause, Sliders, Settings, Moon } from 'lucide-react';
 
 interface TVPlayerProps {
   initialChannelNumber?: number;
@@ -673,8 +673,31 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
         playsInline
         muted={isMuted}
         onClick={triggerOSD}
-        className="w-full h-full object-contain bg-black"
+        className={`w-full h-full object-contain bg-black ${playoutState?.isOffAir ? 'opacity-20' : 'opacity-100'}`}
       />
+
+      {/* Off-Air Night Standby Card */}
+      {playoutState?.isOffAir && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-sm pointer-events-none select-none text-center p-6">
+          <div className="w-20 h-20 rounded-full bg-slate-900 border border-slate-700/80 flex items-center justify-center mb-6 shadow-2xl">
+            <Moon className="w-10 h-10 text-cyan-400 animate-pulse" />
+          </div>
+          <span className="px-3 py-1 rounded-full text-xs font-mono font-bold tracking-widest bg-cyan-950 text-cyan-400 border border-cyan-800/80 uppercase mb-3">
+            BROADCAST SIGN-OFF
+          </span>
+          <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-2">
+            Channel is Currently Off-Air
+          </h1>
+          <p className="text-sm sm:text-base text-slate-400 max-w-md font-medium">
+            {playoutState?.offAirMessage || 'Broadcasting has concluded for the night and will resume in the morning.'}
+          </p>
+          <div className="mt-8 flex items-center gap-3 text-xs text-slate-500 font-mono">
+            <span>CH {activeChannel?.number}</span>
+            <span>•</span>
+            <span>{activeChannel?.name}</span>
+          </div>
+        </div>
+      )}
 
       {/* Prominent Tap to Unmute Overlay */}
       {isMuted && showUnmutePrompt && (
@@ -762,13 +785,19 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
           <div className="flex-1 min-w-0 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 flex-wrap min-w-0">
-                <span className={`px-2 py-0.5 rounded font-bold text-[10px] uppercase tracking-wider border ${
-                  isLiveMode 
-                    ? 'bg-red-500/20 text-red-300 border-red-500/30' 
-                    : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                }`}>
-                  {isLiveMode ? '● LIVE TV' : '⟲ WATCHING REPLAY'}
-                </span>
+                {playoutState?.isOffAir ? (
+                  <span className="px-2 py-0.5 rounded font-bold text-[10px] uppercase tracking-wider border bg-slate-800 text-slate-300 border-slate-700">
+                    ☾ OFF-AIR
+                  </span>
+                ) : (
+                  <span className={`px-2 py-0.5 rounded font-bold text-[10px] uppercase tracking-wider border ${
+                    isLiveMode 
+                      ? 'bg-red-500/20 text-red-300 border-red-500/30' 
+                      : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                  }`}>
+                    {isLiveMode ? '● LIVE TV' : '⟲ WATCHING REPLAY'}
+                  </span>
+                )}
                 {curProg?.seriesName && (
                   <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold text-[11px] uppercase tracking-wider border border-purple-500/40">
                     {curProg.seriesName}

@@ -1,3 +1,12 @@
+export interface TimeBlock {
+  id?: string;
+  name?: string;
+  startHour: number; // 0 - 23 (e.g. 1 for 1 AM)
+  endHour: number;   // 0 - 23 (e.g. 4 for 4 AM)
+  type: 'movie' | 'series_marathon' | 'off_air';
+  genres?: string[];
+}
+
 export interface ChannelRules {
   type?: 'movie' | 'episode' | 'all';
   genres?: string[];         // e.g. ["Action", "Sci-Fi"]
@@ -12,6 +21,7 @@ export interface ChannelRules {
   libraries?: string[];
   sortBy?: 'random' | 'year_asc' | 'year_desc' | 'title' | 'rating' | 'episode_asc';
   limit?: number;
+  timeBlocks?: TimeBlock[];
 }
 
 export interface PlayoutState {
@@ -54,6 +64,8 @@ export interface PlayoutState {
   } | null;
   streamUrl: string;
   isIntermission?: boolean;
+  isOffAir?: boolean;
+  offAirMessage?: string;
 }
 
 export interface MediaServerConfig {

@@ -209,6 +209,19 @@ export class SchedulerService {
   }
 
   /**
+   * Helper to check if a given hour falls inside a time block [startHour, endHour)
+   * Supports wrap-around midnight (e.g. 22:00 to 02:00)
+   */
+  private static isHourInBlock(hour: number, startHour: number, endHour: number): boolean {
+    if (startHour <= endHour) {
+      return hour >= startHour && hour < endHour;
+    } else {
+      // Wraps around midnight (e.g. 23:00 to 04:00)
+      return hour >= startHour || hour < endHour;
+    }
+  }
+
+  /**
    * Generates or extends programming timeline for a channel
    */
   static async ensureSchedule(channelId: string, hoursAhead: number = 48): Promise<number> {
@@ -218,8 +231,68 @@ export class SchedulerService {
 
     if (!channel || !channel.enabled) return 0;
 
+    let rules: ChannelRules = {};
+    try {
+      if (channel.rules) rules = JSON.parse(channel.rules);
+    } catch {}
+
+    const hasTimeBlocks = rules.timeBlocks && Array.isArray(rules.timeBlocks) && rules.timeBlocks.length > 0;
+
+    // Fetch all eligible items for general playout
     const items = await this.getEligibleMediaItems(channel);
     if (items.length === 0) return 0;
+
+    // Separate media pools for time block scheduling
+    const moviePool = items.filter(i => i.type === 'movie');
+    const episodePool = items.filter(i => i.type === 'episode');
+
+    // Group episodes by series for Marathon sequential binge
+    const seriesMap = new Map<string, MediaItem[]>();
+    for (const ep of episodePool) {
+      const sName = ep.seriesName || 'Default Series';
+      if (!seriesMap.has(sName)) {
+        seriesMap.set(sName, []);
+      }
+      seriesMap.get(sName)!.push(ep);
+    }
+
+    // Sort episodes inside each series in chronological order (S01E01 -> SxxExx)
+    for (const [_, epList] of seriesMap) {
+      epList.sort((a, b) =>
+        (a.seasonNumber || 1) - (b.seasonNumber || 1) ||
+        (a.episodeNumber || 1) - (b.episodeNumber || 1)
+      );
+    }
+
+    const seriesNames = Array.from(seriesMap.keys());
+    let currentSeriesIndex = 0;
+    let currentSeriesEpIndex = 0;
+
+    // If channel has existing schedules, find the last played episode and series to maintain continuity
+    const lastProgram = await prisma.programSchedule.findFirst({
+      where: { channelId },
+      orderBy: { endTime: 'desc' },
+      include: { mediaItem: true },
+    });
+
+    if (lastProgram?.mediaItem?.type === 'episode' && lastProgram.mediaItem.seriesName) {
+      const lastSeriesName = lastProgram.mediaItem.seriesName;
+      const sIdx = seriesNames.indexOf(lastSeriesName);
+      if (sIdx !== -1) {
+        currentSeriesIndex = sIdx;
+        const epList = seriesMap.get(lastSeriesName) || [];
+        const epIdx = epList.findIndex(e => e.id === lastProgram.mediaItemId);
+        if (epIdx !== -1) {
+          // Advance to the next episode
+          currentSeriesEpIndex = epIdx + 1;
+          if (currentSeriesEpIndex >= epList.length) {
+            // Series completed, rotate to next series!
+            currentSeriesIndex = (currentSeriesIndex + 1) % seriesNames.length;
+            currentSeriesEpIndex = 0;
+          }
+        }
+      }
+    }
 
     const now = new Date();
     const horizon = new Date(now.getTime() + hoursAhead * 60 * 60 * 1000);
@@ -244,6 +317,7 @@ export class SchedulerService {
     let addedCount = 0;
     let orderIndex = (latest?.orderIndex || 0) + 1;
     let itemIndex = 0;
+    let movieIndex = 0;
 
     const schedulesToCreate: Array<{
       channelId: string;
@@ -256,10 +330,74 @@ export class SchedulerService {
     }> = [];
 
     while (currentStartTime < horizon) {
-      const item = items[itemIndex % items.length];
-      itemIndex++;
+      let chosenItem: MediaItem | null = null;
+      let isOffAirBlock = false;
+      let nextSlotEnd: Date | null = null;
 
-      let duration = item.duration; // in seconds
+      if (hasTimeBlocks && rules.timeBlocks) {
+        const hour = currentStartTime.getHours();
+        const activeBlock = rules.timeBlocks.find(b => this.isHourInBlock(hour, b.startHour, b.endHour));
+
+        if (activeBlock) {
+          if (activeBlock.type === 'off_air') {
+            isOffAirBlock = true;
+            // Calculate how long off-air lasts until endHour
+            const blockEnd = new Date(currentStartTime);
+            if (activeBlock.endHour > activeBlock.startHour) {
+              blockEnd.setHours(activeBlock.endHour, 0, 0, 0);
+            } else {
+              // Wrap midnight
+              if (hour >= activeBlock.startHour) {
+                blockEnd.setDate(blockEnd.getDate() + 1);
+              }
+              blockEnd.setHours(activeBlock.endHour, 0, 0, 0);
+            }
+            nextSlotEnd = blockEnd;
+          } else if (activeBlock.type === 'movie' && moviePool.length > 0) {
+            let matchedMovies = moviePool;
+            if (activeBlock.genres && activeBlock.genres.length > 0) {
+              matchedMovies = moviePool.filter(m => {
+                try {
+                  const g: string[] = JSON.parse(m.genres || '[]');
+                  return activeBlock.genres!.some(bg => g.some(mg => mg.toLowerCase() === bg.toLowerCase()));
+                } catch {
+                  return false;
+                }
+              });
+              if (matchedMovies.length === 0) matchedMovies = moviePool;
+            }
+            chosenItem = matchedMovies[movieIndex % matchedMovies.length];
+            movieIndex++;
+          } else if (activeBlock.type === 'series_marathon' && seriesNames.length > 0) {
+            const currentShowName = seriesNames[currentSeriesIndex % seriesNames.length];
+            const epList = seriesMap.get(currentShowName) || [];
+            
+            if (epList.length > 0) {
+              chosenItem = epList[currentSeriesEpIndex % epList.length];
+              currentSeriesEpIndex++;
+              // When series finishes all episodes, rotate to next show
+              if (currentSeriesEpIndex >= epList.length) {
+                currentSeriesIndex = (currentSeriesIndex + 1) % seriesNames.length;
+                currentSeriesEpIndex = 0;
+              }
+            }
+          }
+        }
+      }
+
+      // If off air: skip forward to blockEnd without scheduling media items
+      if (isOffAirBlock && nextSlotEnd) {
+        currentStartTime = new Date(nextSlotEnd);
+        continue;
+      }
+
+      // Fallback if not in a special block or no item was selected
+      if (!chosenItem) {
+        chosenItem = items[itemIndex % items.length];
+        itemIndex++;
+      }
+
+      let duration = chosenItem.duration; // in seconds
       let endTime: Date;
 
       if (channel.mode === 'slotted') {
@@ -269,13 +407,13 @@ export class SchedulerService {
         endTime = new Date(currentStartTime.getTime() + duration * 1000);
       }
 
-      const formattedTitle = item.type === 'episode' && item.seriesName
-        ? `${item.seriesName} - S${String(item.seasonNumber || 1).padStart(2, '0')}E${String(item.episodeNumber || 1).padStart(2, '0')}: ${item.title}`
-        : item.title;
+      const formattedTitle = chosenItem.type === 'episode' && chosenItem.seriesName
+        ? `${chosenItem.seriesName} - S${String(chosenItem.seasonNumber || 1).padStart(2, '0')}E${String(chosenItem.episodeNumber || 1).padStart(2, '0')}: ${chosenItem.title}`
+        : chosenItem.title;
 
       schedulesToCreate.push({
         channelId: channel.id,
-        mediaItemId: item.id,
+        mediaItemId: chosenItem.id,
         title: formattedTitle,
         startTime: new Date(currentStartTime),
         endTime,
@@ -358,6 +496,26 @@ export class SchedulerService {
     let streamUrl = `${baseUrl}/channels/${channel.number}/stream.m3u8`;
 
     if (!currentSchedule) {
+      let isOffAir = false;
+      let offAirMessage = 'Off-Air (Broadcasting Resumes Shortly)';
+
+      try {
+        if (channel.rules) {
+          const rules: ChannelRules = JSON.parse(channel.rules);
+          if (rules.timeBlocks && Array.isArray(rules.timeBlocks)) {
+            const hour = timestamp.getHours();
+            const activeOffAir = rules.timeBlocks.find(
+              b => b.type === 'off_air' && this.isHourInBlock(hour, b.startHour, b.endHour)
+            );
+            if (activeOffAir) {
+              isOffAir = true;
+              const resumeHour = String(activeOffAir.endHour).padStart(2, '0');
+              offAirMessage = `Off-Air (Broadcasting Resumes at ${resumeHour}:00)`;
+            }
+          }
+        }
+      } catch {}
+
       return {
         channelId: channel.id,
         channelNumber: channel.number,
@@ -365,7 +523,9 @@ export class SchedulerService {
         currentProgram: null,
         nextProgram: null,
         streamUrl,
-        isIntermission: true,
+        isIntermission: !isOffAir,
+        isOffAir,
+        offAirMessage,
       };
     }
 

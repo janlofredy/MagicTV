@@ -49,6 +49,7 @@ export const ChannelsManager: React.FC<ChannelsManagerProps> = ({ onLaunchTV }) 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          createMixedBlockChannels: true,
           createSeriesChannels: true,
           createLibraryChannels: true,
           createGenreChannels: true,
