@@ -18,10 +18,10 @@ export class AutoChannelService {
   /**
    * Automatically generate channels QuasiTV style based on media origin:
    * 1. Magic TV Flagship Channel (Movies prime/matinee, Series binges in daytime, Off-Air overnight)
-   * 2. Dedicated channels for Studios / Networks
-   * 3. Dedicated channels for popular Genres
-   * 4. Dedicated 24/7 channels per TV Series (playing sequential S01E01 -> S01E02...)
-   * 5. Dedicated channels per media Library (e.g. Movies, TV Shows)
+   * 2. Dedicated channels per media Library (e.g. Movies, TV Shows)
+   * 3. Dedicated channels for Studios / Networks
+   * 4. Dedicated channels for popular Genres
+   * 5. Dedicated 24/7 channels per TV Series (playing sequential S01E01 -> S01E02...)
    */
   static async generateChannels(options: AutoChannelOptions = {}): Promise<AutoChannelResult> {
     const {
@@ -123,7 +123,49 @@ export class AutoChannelService {
       }
     }
 
-    // 2. Studio / Network Channels (studios/networks with at least 3 items)
+    // 2. Media Library channels (Movies / Shows libraries)
+    if (createLibraryChannels) {
+      const libraries = await prisma.mediaLibrary.findMany({
+        where: { enabled: true },
+      });
+
+      for (const lib of libraries) {
+        const channelName = `${lib.name} Channel`;
+        if (existingNames.has(channelName.toLowerCase())) continue;
+
+        // Check if there are items in this library
+        const count = await prisma.mediaItem.count({
+          where: { libraryName: lib.name },
+        });
+
+        if (count === 0) continue;
+
+        const isSeries = lib.type === 'tvshows';
+        const newChannel = await prisma.channel.create({
+          data: {
+            number: getAvailableChannelNumber(),
+            name: channelName,
+            description: `All content from ${lib.name} library (${count} items)`,
+            groupTitle: 'Libraries',
+            type: isSeries ? 'series' : 'movie',
+            playMode: isSeries ? 'sequential' : 'shuffle',
+            mode: 'continuous',
+            shuffle: !isSeries,
+            rules: JSON.stringify({
+              libraries: [lib.name],
+              sortBy: isSeries ? 'episode_asc' : 'random',
+            }),
+            enabled: true,
+          },
+        });
+
+        existingNames.add(channelName.toLowerCase());
+        createdNames.push(channelName);
+        await SchedulerService.ensureSchedule(newChannel.id, 48);
+      }
+    }
+
+    // 3. Studio / Network Channels (studios/networks with at least 3 items)
     if (createStudioChannels) {
       const items = await prisma.mediaItem.findMany({
         select: { studios: true },
@@ -301,47 +343,7 @@ export class AutoChannelService {
       }
     }
 
-    // 5. Media Library channels (Movies / Shows libraries)
-    if (createLibraryChannels) {
-      const libraries = await prisma.mediaLibrary.findMany({
-        where: { enabled: true },
-      });
 
-      for (const lib of libraries) {
-        const channelName = `${lib.name} Channel`;
-        if (existingNames.has(channelName.toLowerCase())) continue;
-
-        // Check if there are items in this library
-        const count = await prisma.mediaItem.count({
-          where: { libraryName: lib.name },
-        });
-
-        if (count === 0) continue;
-
-        const isSeries = lib.type === 'tvshows';
-        const newChannel = await prisma.channel.create({
-          data: {
-            number: getAvailableChannelNumber(),
-            name: channelName,
-            description: `All content from ${lib.name} library (${count} items)`,
-            groupTitle: 'Libraries',
-            type: isSeries ? 'series' : 'movie',
-            playMode: isSeries ? 'sequential' : 'shuffle',
-            mode: 'continuous',
-            shuffle: !isSeries,
-            rules: JSON.stringify({
-              libraries: [lib.name],
-              sortBy: isSeries ? 'episode_asc' : 'random',
-            }),
-            enabled: true,
-          },
-        });
-
-        existingNames.add(channelName.toLowerCase());
-        createdNames.push(channelName);
-        await SchedulerService.ensureSchedule(newChannel.id, 48);
-      }
-    }
 
     return {
       createdCount: createdNames.length,
