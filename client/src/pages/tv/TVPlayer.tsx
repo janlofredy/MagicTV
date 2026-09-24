@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Channel } from '../../types.js';
 import Hls from 'hls.js';
-import { ArrowLeft, Tv, Clock, Radio, Sparkles, Volume2, VolumeX, RotateCcw, FastForward, Play, Pause, Sliders } from 'lucide-react';
+import { ArrowLeft, Tv, Clock, Radio, Sparkles, Volume2, VolumeX, RotateCcw, FastForward, Play, Pause, Sliders, Settings } from 'lucide-react';
 
 interface TVPlayerProps {
   initialChannelNumber?: number;
@@ -46,6 +46,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [selectedQuality, setSelectedQuality] = useState<'auto' | '1080p' | '720p' | '480p' | '360p'>('auto');
   const [showQualityMenu, setShowQualityMenu] = useState<boolean>(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState<boolean>(false);
   const activeProgramIdRef = useRef<string | null>(null);
   const [playoutState, setPlayoutState] = useState<any>(null);
   const [channelInputDigits, setChannelInputDigits] = useState('');
@@ -606,10 +607,10 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
   }, [guideFocusedRow, guideFocusedCol, showGuide]);
 
   const formatSeconds = (sec?: number) => {
-    if (!sec) return '0:00';
-    const mins = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${mins}:${s.toString().padStart(2, '0')}`;
+    const total = Math.max(0, Math.floor(sec ?? 0));
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
   const formatClockTime = (dateInput: string | Date) => {
@@ -828,15 +829,6 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                   </button>
 
                   <button
-                    onClick={restartFromBeginning}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all text-[11px] font-semibold"
-                    title="Watch from Start (R)"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Watch from Start</span>
-                  </button>
-
-                  <button
                     onClick={() => seekDelta(-15)}
                     className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all text-[11px]"
                     title="Rewind 15s ([ / Shift+◄)"
@@ -855,7 +847,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                   {/* Quality Selector Dropdown */}
                   <div className="relative">
                     <button
-                      onClick={() => setShowQualityMenu(prev => !prev)}
+                      onClick={() => { setShowQualityMenu(prev => !prev); setShowSettingsMenu(false); }}
                       className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-all text-[11px] font-semibold"
                       title="Select Streaming Quality"
                     >
@@ -892,16 +884,53 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                     )}
                   </div>
 
-                  {!isLiveMode && (
+                  {/* ⚙ Settings — Watch from Start & Jump to Live */}
+                  <div className="relative">
                     <button
-                      onClick={jumpToLive}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-950/80 hover:bg-red-900 border border-red-800 text-red-200 hover:text-white transition-all text-[11px] font-bold animate-pulse"
-                      title="Jump back to Live Broadcast (L)"
+                      onClick={() => { setShowSettingsMenu(prev => !prev); setShowQualityMenu(false); }}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border transition-all text-[11px] font-semibold ${
+                        showSettingsMenu
+                          ? 'bg-slate-700 border-slate-600 text-white'
+                          : 'bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white'
+                      }`}
+                      title="More options"
                     >
-                      <FastForward className="w-3.5 h-3.5" />
-                      <span>Jump to Live</span>
+                      <Settings className="w-3.5 h-3.5 text-cyan-400" />
                     </button>
-                  )}
+
+                    {showSettingsMenu && (
+                      <div className="absolute bottom-full right-0 mb-2 w-48 rounded-xl bg-slate-900/95 border border-slate-700 shadow-2xl p-1.5 z-50 backdrop-blur space-y-1">
+                        <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                          Playback
+                        </div>
+
+                        <button
+                          onClick={() => { restartFromBeginning(); setShowSettingsMenu(false); }}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left text-xs text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
+                          title="Watch from Start (R)"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          <span>Watch from Start</span>
+                          <kbd className="ml-auto px-1 py-0.5 bg-slate-800 rounded text-[9px] text-slate-400 border border-slate-700">R</kbd>
+                        </button>
+
+                        <button
+                          onClick={() => { jumpToLive(); setShowSettingsMenu(false); }}
+                          className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors ${
+                            !isLiveMode
+                              ? 'text-red-300 hover:bg-red-950 hover:text-white font-semibold'
+                              : 'text-slate-500 cursor-not-allowed opacity-50'
+                          }`}
+                          title="Jump to Live (L)"
+                          disabled={isLiveMode}
+                        >
+                          <FastForward className="w-3.5 h-3.5 shrink-0" />
+                          <span>Jump to Live</span>
+                          {!isLiveMode && <kbd className="ml-auto px-1 py-0.5 bg-slate-800 rounded text-[9px] text-slate-400 border border-slate-700">L</kbd>}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

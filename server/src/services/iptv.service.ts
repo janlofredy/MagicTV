@@ -34,8 +34,6 @@ export class IptvService {
       const tvgChno = ch.number;
       const logo = ch.logoUrl || `${baseUrl}/api/channels/${ch.id}/logo`;
       const group = ch.groupTitle || 'Movies';
-      // Proxy endpoint: MagicTV transparently proxies the upstream file with byte-range support.
-      // This lets Jellyfin Live TV expose full scrub controls without looping back into its own HLS.
       const streamUrl = `${baseUrl}/channels/${ch.number}/stream`;
 
       lines.push(
