@@ -17,11 +17,11 @@ export interface AutoChannelResult {
 export class AutoChannelService {
   /**
    * Automatically generate channels QuasiTV style based on media origin:
-   * 1. Mixed Time-Block Channels (Movies prime/matinee, Series binges in daytime, Off-Air overnight)
-   * 2. Dedicated 24/7 channels per TV series (playing sequential S01E01 -> S01E02...)
-   * 3. Dedicated channels per media library (e.g. Movies, TV Shows)
-   * 4. Dedicated channels for popular genres
-   * 5. Dedicated channels for top studios
+   * 1. Magic TV Flagship Channel (Movies prime/matinee, Series binges in daytime, Off-Air overnight)
+   * 2. Dedicated channels for Studios / Networks
+   * 3. Dedicated channels for popular Genres
+   * 4. Dedicated 24/7 channels per TV Series (playing sequential S01E01 -> S01E02...)
+   * 5. Dedicated channels per media Library (e.g. Movies, TV Shows)
    */
   static async generateChannels(options: AutoChannelOptions = {}): Promise<AutoChannelResult> {
     const {
@@ -123,7 +123,116 @@ export class AutoChannelService {
       }
     }
 
-    // 2. TV Series dedicated channels (Sequential playout)
+    // 2. Studio / Network Channels (studios/networks with at least 3 items)
+    if (createStudioChannels) {
+      const items = await prisma.mediaItem.findMany({
+        select: { studios: true },
+      });
+
+      const studioCounts = new Map<string, number>();
+      for (const item of items) {
+        try {
+          const parsed = JSON.parse(item.studios || '[]');
+          if (Array.isArray(parsed)) {
+            for (const s of parsed) {
+              const cleanS = s.trim();
+              if (cleanS) {
+                studioCounts.set(cleanS, (studioCounts.get(cleanS) || 0) + 1);
+              }
+            }
+          }
+        } catch {}
+      }
+
+      const sortedStudios = Array.from(studioCounts.entries())
+        .filter(([_, count]) => count >= 3)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10); // Top 10 studios max
+
+      for (const [studio, count] of sortedStudios) {
+        const channelName = `${studio} TV`;
+        if (existingNames.has(channelName.toLowerCase())) continue;
+
+        const newChannel = await prisma.channel.create({
+          data: {
+            number: getAvailableChannelNumber(),
+            name: channelName,
+            description: `Curated programming from ${studio} (${count} titles)`,
+            groupTitle: 'Studios',
+            type: 'mixed',
+            playMode: 'shuffle',
+            mode: 'continuous',
+            shuffle: true,
+            rules: JSON.stringify({
+              studios: [studio],
+              sortBy: 'random',
+            }),
+            enabled: true,
+          },
+        });
+
+        existingNames.add(channelName.toLowerCase());
+        createdNames.push(channelName);
+        await SchedulerService.ensureSchedule(newChannel.id, 48);
+      }
+    }
+
+    // 3. Genre Channels (genres with at least 3 items)
+    if (createGenreChannels) {
+      const items = await prisma.mediaItem.findMany({
+        select: { genres: true },
+      });
+
+      const genreCounts = new Map<string, number>();
+      for (const item of items) {
+        try {
+          const parsed = JSON.parse(item.genres || '[]');
+          if (Array.isArray(parsed)) {
+            for (const g of parsed) {
+              const cleanG = g.trim();
+              if (cleanG) {
+                genreCounts.set(cleanG, (genreCounts.get(cleanG) || 0) + 1);
+              }
+            }
+          }
+        } catch {}
+      }
+
+      // Sort genres by count descending
+      const sortedGenres = Array.from(genreCounts.entries())
+        .filter(([_, count]) => count >= 3)
+        .sort((a, b) => b[1] - a[1]);
+
+      for (const [genre, count] of sortedGenres) {
+        const channelName = `${genre} 24/7`;
+        if (existingNames.has(channelName.toLowerCase())) continue;
+
+        const newChannel = await prisma.channel.create({
+          data: {
+            number: getAvailableChannelNumber(),
+            name: channelName,
+            description: `Non-stop ${genre} movies and entertainment (${count} titles)`,
+            groupTitle: 'Genres',
+            type: 'mixed',
+            playMode: 'shuffle',
+            mode: 'continuous',
+            shuffle: true,
+            rules: JSON.stringify({
+              genres: [genre],
+              genresOperator: 'OR',
+              sortBy: 'random',
+            }),
+            enabled: true,
+          },
+        });
+
+        existingNames.add(channelName.toLowerCase());
+        createdNames.push(channelName);
+        await SchedulerService.ensureSchedule(newChannel.id, 48);
+      }
+    }
+
+    // 4. TV Series Dedicated Channels (Sequential playout per show)
     if (createSeriesChannels) {
       // Find all distinct series in database
       const episodes = await prisma.mediaItem.findMany({
@@ -192,7 +301,7 @@ export class AutoChannelService {
       }
     }
 
-    // 2. Media Library channels (Movies / Shows libraries)
+    // 5. Media Library channels (Movies / Shows libraries)
     if (createLibraryChannels) {
       const libraries = await prisma.mediaLibrary.findMany({
         where: { enabled: true },
@@ -223,115 +332,6 @@ export class AutoChannelService {
             rules: JSON.stringify({
               libraries: [lib.name],
               sortBy: isSeries ? 'episode_asc' : 'random',
-            }),
-            enabled: true,
-          },
-        });
-
-        existingNames.add(channelName.toLowerCase());
-        createdNames.push(channelName);
-        await SchedulerService.ensureSchedule(newChannel.id, 48);
-      }
-    }
-
-    // 3. Genre Channels (genres with at least 3 items)
-    if (createGenreChannels) {
-      const items = await prisma.mediaItem.findMany({
-        select: { genres: true },
-      });
-
-      const genreCounts = new Map<string, number>();
-      for (const item of items) {
-        try {
-          const parsed = JSON.parse(item.genres || '[]');
-          if (Array.isArray(parsed)) {
-            for (const g of parsed) {
-              const cleanG = g.trim();
-              if (cleanG) {
-                genreCounts.set(cleanG, (genreCounts.get(cleanG) || 0) + 1);
-              }
-            }
-          }
-        } catch {}
-      }
-
-      // Sort genres by count descending
-      const sortedGenres = Array.from(genreCounts.entries())
-        .filter(([_, count]) => count >= 3)
-        .sort((a, b) => b[1] - a[1]);
-
-      for (const [genre, count] of sortedGenres) {
-        const channelName = `${genre} 24/7`;
-        if (existingNames.has(channelName.toLowerCase())) continue;
-
-        const newChannel = await prisma.channel.create({
-          data: {
-            number: getAvailableChannelNumber(),
-            name: channelName,
-            description: `Non-stop ${genre} movies and entertainment (${count} titles)`,
-            groupTitle: 'Genres',
-            type: 'mixed',
-            playMode: 'shuffle',
-            mode: 'continuous',
-            shuffle: true,
-            rules: JSON.stringify({
-              genres: [genre],
-              genresOperator: 'OR',
-              sortBy: 'random',
-            }),
-            enabled: true,
-          },
-        });
-
-        existingNames.add(channelName.toLowerCase());
-        createdNames.push(channelName);
-        await SchedulerService.ensureSchedule(newChannel.id, 48);
-      }
-    }
-
-    // 4. Studio Channels (studios with at least 3 items)
-    if (createStudioChannels) {
-      const items = await prisma.mediaItem.findMany({
-        select: { studios: true },
-      });
-
-      const studioCounts = new Map<string, number>();
-      for (const item of items) {
-        try {
-          const parsed = JSON.parse(item.studios || '[]');
-          if (Array.isArray(parsed)) {
-            for (const s of parsed) {
-              const cleanS = s.trim();
-              if (cleanS) {
-                studioCounts.set(cleanS, (studioCounts.get(cleanS) || 0) + 1);
-              }
-            }
-          }
-        } catch {}
-      }
-
-      const sortedStudios = Array.from(studioCounts.entries())
-        .filter(([_, count]) => count >= 3)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10); // Top 10 studios max
-
-      for (const [studio, count] of sortedStudios) {
-        const channelName = `${studio} TV`;
-        if (existingNames.has(channelName.toLowerCase())) continue;
-
-        const newChannel = await prisma.channel.create({
-          data: {
-            number: getAvailableChannelNumber(),
-            name: channelName,
-            description: `Curated programming from ${studio} (${count} titles)`,
-            groupTitle: 'Studios',
-            type: 'mixed',
-            playMode: 'shuffle',
-            mode: 'continuous',
-            shuffle: true,
-            rules: JSON.stringify({
-              studios: [studio],
-              sortBy: 'random',
             }),
             enabled: true,
           },
