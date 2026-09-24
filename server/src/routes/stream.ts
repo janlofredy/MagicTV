@@ -45,6 +45,11 @@ router.get(['/:channelNumber/stream', '/:channelNumber/stream.m3u8'], async (req
       maxBitrate
     );
     
+    // Ensure clients and intermediate proxies/tuner clients do not cache the 302 redirect
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
     // HTTP 302 Found redirect directly to the Plex / Jellyfin media stream with calculated offset
     res.redirect(302, redirectUrl);
   } catch (err: any) {

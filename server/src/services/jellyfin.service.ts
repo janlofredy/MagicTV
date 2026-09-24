@@ -257,18 +257,20 @@ export class JellyfinService {
 
     if (maxBitrate) {
       // Transcode stream for lower bitrate/quality (MP4 stream)
-      return `${cleanUrl}/Videos/${itemId}/stream.mp4?MediaSourceId=${itemId}&VideoCodec=h264&AudioCodec=aac${bitrateParam}&StartTimeTicks=${ticks}&api_key=${token}`;
+      return `${cleanUrl}/Videos/${itemId}/stream.mp4?MediaSourceId=${itemId}&VideoCodec=h264&AudioCodec=aac${bitrateParam}&StartTimeTicks=${ticks}&PlaySessionId=MagicTV-${Date.now()}&api_key=${token}`;
     }
 
     if (ticks > 0) {
       // Jellyfin static streams IGNORE StartTimeTicks — the full file is always served from byte 0.
       // When an offset is required (e.g. live broadcast mid-progress), use the transcoded stream.mp4
       // which correctly starts encoding from StartTimeTicks.
-      return `${cleanUrl}/Videos/${itemId}/stream.mp4?MediaSourceId=${itemId}&VideoCodec=h264&AudioCodec=aac&StartTimeTicks=${ticks}&api_key=${token}`;
+      // PlaySessionId ensures Jellyfin generates a fresh transcode session at the requested live offset
+      // rather than reconnecting to an earlier/stale transcode session.
+      return `${cleanUrl}/Videos/${itemId}/stream.mp4?MediaSourceId=${itemId}&VideoCodec=h264&AudioCodec=aac&StartTimeTicks=${ticks}&PlaySessionId=MagicTV-${Date.now()}&api_key=${token}`;
     }
 
     // No offset — direct play the original file for maximum quality & zero transcoding CPU
-    return `${cleanUrl}/Videos/${itemId}/stream?static=true&api_key=${token}`;
+    return `${cleanUrl}/Videos/${itemId}/stream?static=true&PlaySessionId=MagicTV-${Date.now()}&api_key=${token}`;
   }
 
   static getArtworkUrl(baseUrl: string, token: string, itemId: string, type: 'Primary' | 'Backdrop' = 'Primary'): string {
