@@ -202,24 +202,35 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     }
   }, [playoutState, isLiveMode]);
 
-  const loadStream = (channelNumber: number, customOffset?: number, quality: string = selectedQuality) => {
+  const loadStream = async (channelNumber: number, customOffset?: number, quality: string = selectedQuality) => {
     const video = videoRef.current;
     if (!video) return;
 
-    // Record where in the movie this stream starts.
-    // For custom offsets the caller knows exactly. For live mode, the server embeds
-    // StartTimeTicks = elapsedSeconds into the HLS URL, so the stream's t=0 already
-    // corresponds to that position in the movie.
+    let targetOffset: number;
     if (customOffset !== undefined) {
-      loadedOffsetRef.current = customOffset;
+      targetOffset = Math.max(0, customOffset);
     } else {
-      // Live mode: capture current elapsedSeconds as the load-time offset
-      loadedOffsetRef.current = playoutState?.currentProgram?.elapsedSeconds ?? 0;
+      // Live mode: fetch current playout offset to avoid desync
+      try {
+        const res = await fetch(`/api/channels/${channelNumber}/playout`);
+        if (res.ok) {
+          const state = await res.json();
+          setPlayoutState(state);
+          targetOffset = state?.currentProgram?.elapsedSeconds ?? 0;
+        } else {
+          targetOffset = playoutState?.currentProgram?.elapsedSeconds ?? 0;
+        }
+      } catch {
+        targetOffset = playoutState?.currentProgram?.elapsedSeconds ?? 0;
+      }
     }
+
+    loadedOffsetRef.current = targetOffset;
+    setVideoCurrentTime(0);
 
     const params = new URLSearchParams();
     if (customOffset !== undefined) {
-      params.set('offset', String(Math.max(0, Math.floor(customOffset))));
+      params.set('offset', String(Math.floor(targetOffset)));
     }
     if (quality && quality !== 'auto') {
       params.set('quality', quality);
@@ -230,13 +241,9 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     const directUrl = `/channels/${channelNumber}/stream${queryString}`;
 
     let started = false;
-
     const startPlayback = () => {
       if (started) return;
       started = true;
-      // The HLS stream already starts at the correct movie position (via StartTimeTicks).
-      // Do NOT seek — seeking would double-offset and cause massive buffering delay.
-      video.currentTime = 0;
       video.play().catch(e => console.log('Autoplay prevented:', e));
     };
 
@@ -614,9 +621,10 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
 
   const formatSeconds = (sec?: number) => {
     const total = Math.max(0, Math.floor(sec ?? 0));
-    const mins = Math.floor(total / 60);
+    const hours = Math.floor(total / 3600);
+    const mins = Math.floor((total % 3600) / 60);
     const secs = total % 60;
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
   const formatClockTime = (dateInput: string | Date) => {

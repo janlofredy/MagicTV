@@ -238,7 +238,13 @@ router.get('/:id', async (req, res) => {
 // GET /api/channels/:id/playout - Live playout state for TV player
 router.get('/:id/playout', async (req, res) => {
   try {
-    const state = await SchedulerService.getCurrentPlayoutState(req.params.id);
+    let channelId = req.params.id;
+    const num = parseInt(channelId, 10);
+    if (!isNaN(num) && String(num) === channelId) {
+      const ch = await prisma.channel.findUnique({ where: { number: num } });
+      if (ch) channelId = ch.id;
+    }
+    const state = await SchedulerService.getCurrentPlayoutState(channelId);
     res.json(state);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
