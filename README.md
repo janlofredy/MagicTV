@@ -64,9 +64,7 @@ If you prefer filling the CasaOS custom app form manually:
      - Host Path: `/DATA/AppData/magictv`
      - Container Path: `/data`
    - **Environment Variables**:
-     - `PORT`: `8000`
-     - `DATABASE_URL`: `file:/data/magictv.db`
-     - `BASE_URL`: `http://<your-casaos-ip>:8000`
+     - `TZ`: `Asia/Manila` (or your local IANA timezone)
 3. Click **Install**.
 
 ---
@@ -87,9 +85,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - PORT=8000
-      - DATABASE_URL=file:/data/magictv.db
-      - BASE_URL=http://localhost:8000
+      - TZ=Asia/Manila
     volumes:
       - ./data:/data
 ```
@@ -105,8 +101,7 @@ docker run -d \
   --name magictv \
   -p 8000:8000 \
   -v $(pwd)/data:/data \
-  -e PORT=8000 \
-  -e DATABASE_URL="file:/data/magictv.db" \
+  -e TZ=Asia/Manila \
   --restart unless-stopped \
   ghcr.io/janlofredy/magictv:latest
 ```

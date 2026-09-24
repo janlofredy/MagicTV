@@ -14,17 +14,12 @@ services:
         source: /DATA/AppData/magictv
         target: /data
     environment:
-      - PORT=8000
-      - DATABASE_URL=file:/data/magictv.db
-      - BASE_URL=http://localhost:8000
+      - TZ=Asia/Manila
     x-casaos:
       envs:
-        - container: PORT
+        - container: TZ
           description:
-            en_us: Web & IPTV Server Port (default 8000)
-        - container: BASE_URL
-          description:
-            en_us: Host IP or Domain URL (e.g. http://192.168.1.100:8000)
+            en_us: Timezone for off-air and timeblock scheduling (e.g. Asia/Manila, America/New_York)
       ports:
         - container: '8000'
           description:
