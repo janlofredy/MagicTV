@@ -79,16 +79,6 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     ? ((curProg.mediaOffset || 0) + curProg.duration) 
     : (loadedOffsetRef.current + (videoDuration || 3600));
 
-  const getProgramLiveOffset = (prog?: any): number => {
-    if (!prog) return 0;
-    const mediaOffset = prog.mediaOffset || 0;
-    if (prog.startTime) {
-      const elapsed = Math.max(0, Math.floor((Date.now() - new Date(prog.startTime).getTime()) / 1000));
-      return mediaOffset + elapsed;
-    }
-    return mediaOffset + (prog.elapsedSeconds || 0);
-  };
-
   // Keep a running clock for EPG timeline red line
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 10000);
@@ -196,9 +186,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     };
   }, [activeChannel]);
 
-  // Synchronize playback position with live broadcast offset ONLY when in Live TV mode.
-  // The HLS stream starts at loadedOffsetRef.current, so video.currentTime=0 already
-  // corresponds to real-time broadcast at load time. We re-sync if drift > 30s or program transitions.
+  // Re-sync stream when live broadcast program changes
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !playoutState?.currentProgram || !isLiveMode) return;
@@ -212,38 +200,37 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
       if (activeChannel) {
         loadStream(activeChannel.number);
       }
-      return;
-    }
-
-    const currentLivePos = getProgramLiveOffset(prog);
-    const currentVideoPos = loadedOffsetRef.current + video.currentTime;
-    const drift = currentVideoPos - currentLivePos;
-
-    if (
-      video.readyState >= 1 &&
-      Math.abs(drift) > 30
-    ) {
-      console.log(`[TVPlayer PlayoutSync] Drift ${drift.toFixed(0)}s detected — re-syncing stream...`);
-      if (activeChannel) {
-        loadStream(activeChannel.number);
-      }
     }
   }, [playoutState, isLiveMode]);
 
-  const loadStream = (channelNumber: number, customOffset?: number, quality: string = selectedQuality) => {
+  const loadStream = async (channelNumber: number, customOffset?: number, quality: string = selectedQuality) => {
     const video = videoRef.current;
     if (!video) return;
-
-    const targetChannel = channels.find(c => c.number === channelNumber) || activeChannel;
-    const prog = (playoutState?.channelNumber === channelNumber ? playoutState.currentProgram : null) 
-      || targetChannel?.currentProgram;
 
     let targetOffset: number;
 
     if (customOffset !== undefined) {
       targetOffset = Math.max(0, customOffset);
     } else {
-      targetOffset = getProgramLiveOffset(prog);
+      // In live mode, fetch latest playout state directly to synchronize start time
+      try {
+        const res = await fetch(`/api/channels/${channelNumber}/playout`);
+        if (res.ok) {
+          const state = await res.json();
+          setPlayoutState(state);
+          const prog = state?.currentProgram;
+          const mediaOffset = prog?.mediaOffset || 0;
+          targetOffset = mediaOffset + (prog?.elapsedSeconds ?? 0);
+        } else {
+          const prog = playoutState?.currentProgram || activeChannel?.currentProgram;
+          const mediaOffset = prog?.mediaOffset || 0;
+          targetOffset = mediaOffset + (prog?.elapsedSeconds ?? 0);
+        }
+      } catch {
+        const prog = playoutState?.currentProgram || activeChannel?.currentProgram;
+        const mediaOffset = prog?.mediaOffset || 0;
+        targetOffset = mediaOffset + (prog?.elapsedSeconds ?? 0);
+      }
     }
 
     loadedOffsetRef.current = targetOffset;
@@ -275,6 +262,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     if (Hls.isSupported()) {
       if (hlsRef.current) {
         hlsRef.current.destroy();
+        hlsRef.current = null;
       }
 
       const hls = new Hls({
