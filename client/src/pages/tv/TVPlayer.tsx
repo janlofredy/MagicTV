@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Channel } from '../../types.js';
 import Hls from 'hls.js';
-import { ArrowLeft, Tv, Clock, Radio, Sparkles, Volume2, VolumeX, RotateCcw, FastForward, Play, Pause, Sliders, Settings, Moon } from 'lucide-react';
+import { ArrowLeft, Tv, Clock, Radio, Sparkles, Volume2, VolumeX, RotateCcw, FastForward, Play, Pause, Sliders, Settings, Moon, Coffee } from 'lucide-react';
 
 interface TVPlayerProps {
   initialChannelNumber?: number;
@@ -686,6 +686,72 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
             <span>CH {activeChannel?.number}</span>
             <span>•</span>
             <span>{activeChannel?.name}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Bathroom Break / Intermission Standby Card */}
+      {playoutState?.isIntermission && !playoutState?.isOffAir && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-950/85 backdrop-blur-md select-none text-center p-6 overflow-hidden">
+          {/* Subtle movie backdrop in background */}
+          {playoutState?.currentProgram?.backdropUrl && (
+            <div
+              className="absolute inset-0 opacity-15 bg-cover bg-center filter blur-xl scale-110 pointer-events-none"
+              style={{ backgroundImage: `url(${playoutState.currentProgram.backdropUrl})` }}
+            />
+          )}
+
+          <div className="relative z-10 flex flex-col items-center max-w-lg">
+            <div className="w-20 h-20 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-5 shadow-2xl shadow-amber-500/10">
+              <Coffee className="w-10 h-10 text-amber-400 animate-pulse" />
+            </div>
+
+            <span className="px-3.5 py-1 rounded-full text-xs font-mono font-bold tracking-widest bg-amber-950/80 text-amber-400 border border-amber-800/80 uppercase mb-3 shadow-sm">
+              INTERMISSION • BATHROOM BREAK
+            </span>
+
+            <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight mb-2">
+              Time for a Quick Break!
+            </h1>
+
+            <p className="text-sm sm:text-base text-slate-300 font-medium mb-6">
+              Grab snacks, stretch, or use the restroom. Part 2 of{' '}
+              <span className="text-white font-bold">
+                {playoutState.currentProgram?.title?.replace(/\s*\((Part 1|Part 2|Intermission[^)]*)\)/gi, '') || 'the feature presentation'}
+              </span>{' '}
+              will resume automatically.
+            </p>
+
+            {/* Countdown timer card */}
+            <div className="w-full bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl mb-6">
+              <div className="flex items-center justify-between mb-2 text-xs font-mono">
+                <span className="text-slate-400 uppercase font-semibold">Resuming In:</span>
+                <span className="text-amber-400 font-bold text-base">
+                  {Math.floor((playoutState.currentProgram?.remainingSeconds || 0) / 60)}:
+                  {String((playoutState.currentProgram?.remainingSeconds || 0) % 60).padStart(2, '0')}
+                </span>
+              </div>
+              <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                <div
+                  className="bg-gradient-to-r from-amber-500 to-yellow-400 h-full rounded-full transition-all duration-1000 ease-linear"
+                  style={{ width: `${playoutState.currentProgram?.progressPercentage || 0}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Skip Break Action */}
+            <button
+              onClick={() => {
+                if (activeChannel) {
+                  // Skip break and jump straight into Part 2 at 1-hour mark (3600s)
+                  loadStream(activeChannel.number, 3600);
+                }
+              }}
+              className="pointer-events-auto flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-white font-semibold text-xs transition-all shadow-md active:scale-95"
+            >
+              <FastForward className="w-4 h-4 text-amber-400" />
+              <span>Skip Break & Resume Part 2 Now</span>
+            </button>
           </div>
         </div>
       )}

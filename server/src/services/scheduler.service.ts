@@ -330,8 +330,22 @@ export class SchedulerService {
 
     let addedCount = 0;
     let orderIndex = (latest?.orderIndex || 0) + 1;
+    let lastScheduledId: string | undefined = latest?.mediaItemId;
+
+    // Track index positions for continuity across scheduling runs so movies/items don't restart from 0
     let itemIndex = 0;
     let movieIndex = 0;
+
+    if (lastScheduledId) {
+      const lastItemIdx = items.findIndex(i => i.id === lastScheduledId);
+      if (lastItemIdx !== -1) {
+        itemIndex = (lastItemIdx + 1) % items.length;
+      }
+      const lastMovieIdx = moviePool.findIndex(m => m.id === lastScheduledId);
+      if (lastMovieIdx !== -1) {
+        movieIndex = (lastMovieIdx + 1) % moviePool.length;
+      }
+    }
 
     const schedulesToCreate: Array<{
       channelId: string;
@@ -341,6 +355,8 @@ export class SchedulerService {
       endTime: Date;
       duration: number;
       orderIndex: number;
+      mediaOffset?: number;
+      isIntermission?: boolean;
     }> = [];
 
     while (currentStartTime < horizon) {
@@ -384,6 +400,7 @@ export class SchedulerService {
             }
             // Advance timeline to end of off-air block without scheduling anything
             currentStartTime = blockEnd;
+            lastScheduledId = undefined; // Reset after off-air gap
             continue;
           } else if (activeBlock.type === 'movie' && moviePool.length > 0) {
             let matchedMovies = moviePool;
@@ -397,6 +414,9 @@ export class SchedulerService {
                 }
               });
               if (matchedMovies.length === 0) matchedMovies = moviePool;
+            }
+            if (matchedMovies.length > 1 && matchedMovies[movieIndex % matchedMovies.length].id === lastScheduledId) {
+              movieIndex++;
             }
             chosenItem = matchedMovies[movieIndex % matchedMovies.length];
             movieIndex++;
@@ -419,54 +439,163 @@ export class SchedulerService {
 
       // Fallback if not in a special block or no item was selected
       if (!chosenItem) {
+        if (items.length > 1 && items[itemIndex % items.length].id === lastScheduledId) {
+          itemIndex++;
+        }
         chosenItem = items[itemIndex % items.length];
         itemIndex++;
       }
 
-      let duration = chosenItem.duration; // in seconds
-      let endTime: Date;
-
-      if (channel.mode === 'slotted') {
-        const slotSeconds = (channel.slotDuration || 120) * 60;
-        endTime = new Date(currentStartTime.getTime() + slotSeconds * 1000);
-      } else {
-        endTime = new Date(currentStartTime.getTime() + duration * 1000);
-      }
-
-      // If there is an upcoming off_air block, don't let this item overrun past the off-air start
-      if (hasTimeBlocks && rules.timeBlocks) {
-        const offAirBlocks = rules.timeBlocks.filter(b => b.type === 'off_air');
-        for (const oBlock of offAirBlocks) {
-          const nextOffAirStart = new Date(currentStartTime);
-          if (oBlock.startHour > currentStartTime.getHours()) {
-            nextOffAirStart.setHours(oBlock.startHour, 0, 0, 0);
-          } else {
-            nextOffAirStart.setDate(nextOffAirStart.getDate() + 1);
-            nextOffAirStart.setHours(oBlock.startHour, 0, 0, 0);
-          }
-
-          if (endTime > nextOffAirStart && currentStartTime < nextOffAirStart) {
-            endTime = nextOffAirStart;
-          }
+      // Safety guard: ensure the same media item never plays back-to-back if alternatives exist
+      if (chosenItem && lastScheduledId && chosenItem.id === lastScheduledId && items.length > 1) {
+        const altItem = items.find(i => i.id !== lastScheduledId);
+        if (altItem) {
+          chosenItem = altItem;
         }
       }
 
-      const formattedTitle = chosenItem.type === 'episode' && chosenItem.seriesName
-        ? `${chosenItem.seriesName} - S${String(chosenItem.seasonNumber || 1).padStart(2, '0')}E${String(chosenItem.episodeNumber || 1).padStart(2, '0')}: ${chosenItem.title}`
-        : chosenItem.title;
+      if (chosenItem) {
+        lastScheduledId = chosenItem.id;
+      }
 
-      schedulesToCreate.push({
-        channelId: channel.id,
-        mediaItemId: chosenItem.id,
-        title: formattedTitle,
-        startTime: new Date(currentStartTime),
-        endTime,
-        duration,
-        orderIndex: orderIndex++,
-      });
+      // Bathroom break / Intermission for long movies
+      // Triggers if: movie duration >= 75 minutes (4500s), and intermission is enabled (defaults to true)
+      const enableIntermissions = rules.enableIntermissions ?? true;
+      const intermissionThreshold = (rules.intermissionThresholdMinutes ?? 75) * 60; // 75 mins = 4500s
+      const intermissionBreak = (rules.intermissionBreakMinutes ?? 5) * 60;          // 5 mins = 300s
+      const intermissionInterval = (rules.intermissionIntervalMinutes ?? 60) * 60;   // 60 mins = 3600s
 
-      currentStartTime = new Date(endTime);
-      addedCount++;
+      const qualifiesForBreak = enableIntermissions &&
+        chosenItem.type === 'movie' &&
+        chosenItem.duration >= intermissionThreshold;
+
+      if (qualifiesForBreak) {
+        // Part 1: First 60 minutes
+        const part1Duration = intermissionInterval;
+        const part1EndTime = new Date(currentStartTime.getTime() + part1Duration * 1000);
+
+        schedulesToCreate.push({
+          channelId: channel.id,
+          mediaItemId: chosenItem.id,
+          title: `${chosenItem.title} (Part 1)`,
+          startTime: new Date(currentStartTime),
+          endTime: part1EndTime,
+          duration: part1Duration,
+          mediaOffset: 0,
+          isIntermission: false,
+          orderIndex: orderIndex++,
+        });
+        addedCount++;
+
+        // Bathroom Break: 5-minute intermission
+        const intermissionEndTime = new Date(part1EndTime.getTime() + intermissionBreak * 1000);
+        schedulesToCreate.push({
+          channelId: channel.id,
+          mediaItemId: chosenItem.id,
+          title: `Intermission: Bathroom Break (${chosenItem.title})`,
+          startTime: part1EndTime,
+          endTime: intermissionEndTime,
+          duration: intermissionBreak,
+          mediaOffset: part1Duration,
+          isIntermission: true,
+          orderIndex: orderIndex++,
+        });
+        addedCount++;
+
+        // Part 2: Remaining movie duration
+        const part2Duration = chosenItem.duration - part1Duration;
+        let part2EndTime: Date;
+        if (channel.mode === 'slotted') {
+          const totalSlotSeconds = (channel.slotDuration || 120) * 60;
+          part2EndTime = new Date(currentStartTime.getTime() + totalSlotSeconds * 1000);
+          if (part2EndTime <= intermissionEndTime) {
+            part2EndTime = new Date(intermissionEndTime.getTime() + part2Duration * 1000);
+          }
+        } else {
+          part2EndTime = new Date(intermissionEndTime.getTime() + part2Duration * 1000);
+        }
+
+        // Clamp against upcoming off-air block if applicable
+        if (hasTimeBlocks && rules.timeBlocks) {
+          const offAirBlocks = rules.timeBlocks.filter(b => b.type === 'off_air');
+          for (const oBlock of offAirBlocks) {
+            const nextOffAirStart = new Date(currentStartTime);
+            if (oBlock.startHour > currentStartTime.getHours()) {
+              nextOffAirStart.setHours(oBlock.startHour, 0, 0, 0);
+            } else {
+              nextOffAirStart.setDate(nextOffAirStart.getDate() + 1);
+              nextOffAirStart.setHours(oBlock.startHour, 0, 0, 0);
+            }
+
+            if (part2EndTime > nextOffAirStart && intermissionEndTime < nextOffAirStart) {
+              part2EndTime = nextOffAirStart;
+            }
+          }
+        }
+
+        schedulesToCreate.push({
+          channelId: channel.id,
+          mediaItemId: chosenItem.id,
+          title: `${chosenItem.title} (Part 2)`,
+          startTime: intermissionEndTime,
+          endTime: part2EndTime,
+          duration: part2Duration,
+          mediaOffset: part1Duration,
+          isIntermission: false,
+          orderIndex: orderIndex++,
+        });
+        addedCount++;
+
+        currentStartTime = new Date(part2EndTime);
+      } else {
+        // Standard single item
+        let duration = chosenItem.duration; // in seconds
+        let endTime: Date;
+
+        if (channel.mode === 'slotted') {
+          const slotSeconds = (channel.slotDuration || 120) * 60;
+          endTime = new Date(currentStartTime.getTime() + slotSeconds * 1000);
+        } else {
+          endTime = new Date(currentStartTime.getTime() + duration * 1000);
+        }
+
+        // If there is an upcoming off_air block, don't let this item overrun past the off-air start
+        if (hasTimeBlocks && rules.timeBlocks) {
+          const offAirBlocks = rules.timeBlocks.filter(b => b.type === 'off_air');
+          for (const oBlock of offAirBlocks) {
+            const nextOffAirStart = new Date(currentStartTime);
+            if (oBlock.startHour > currentStartTime.getHours()) {
+              nextOffAirStart.setHours(oBlock.startHour, 0, 0, 0);
+            } else {
+              nextOffAirStart.setDate(nextOffAirStart.getDate() + 1);
+              nextOffAirStart.setHours(oBlock.startHour, 0, 0, 0);
+            }
+
+            if (endTime > nextOffAirStart && currentStartTime < nextOffAirStart) {
+              endTime = nextOffAirStart;
+            }
+          }
+        }
+
+        const formattedTitle = chosenItem.type === 'episode' && chosenItem.seriesName
+          ? `${chosenItem.seriesName} - S${String(chosenItem.seasonNumber || 1).padStart(2, '0')}E${String(chosenItem.episodeNumber || 1).padStart(2, '0')}: ${chosenItem.title}`
+          : chosenItem.title;
+
+        schedulesToCreate.push({
+          channelId: channel.id,
+          mediaItemId: chosenItem.id,
+          title: formattedTitle,
+          startTime: new Date(currentStartTime),
+          endTime,
+          duration,
+          mediaOffset: 0,
+          isIntermission: false,
+          orderIndex: orderIndex++,
+        });
+
+        currentStartTime = new Date(endTime);
+        addedCount++;
+      }
     }
 
     if (schedulesToCreate.length > 0) {
@@ -594,13 +723,15 @@ export class SchedulerService {
       currentProgram: {
         id: currentSchedule.id,
         mediaItemId: media.id,
-        title: media.title,
+        title: currentSchedule.title || media.title,
         type: media.type,
         seriesName: media.seriesName,
         seasonNumber: media.seasonNumber,
         episodeNumber: media.episodeNumber,
         year: media.year,
-        overview: media.overview,
+        overview: currentSchedule.isIntermission
+          ? `Grab snacks or take a break! ${media.title} will resume with Part 2 shortly.`
+          : media.overview,
         posterUrl: media.posterUrl,
         backdropUrl: media.backdropUrl,
         genres,
@@ -612,11 +743,13 @@ export class SchedulerService {
         elapsedSeconds,
         remainingSeconds,
         progressPercentage,
+        mediaOffset: currentSchedule.mediaOffset || 0,
+        isIntermission: currentSchedule.isIntermission || false,
       },
       nextProgram: nextSchedule
         ? {
             id: nextSchedule.id,
-            title: nextSchedule.mediaItem.title,
+            title: nextSchedule.title || nextSchedule.mediaItem.title,
             type: nextSchedule.mediaItem.type,
             seriesName: nextSchedule.mediaItem.seriesName,
             seasonNumber: nextSchedule.mediaItem.seasonNumber,
@@ -625,10 +758,11 @@ export class SchedulerService {
             endTime: nextSchedule.endTime.toISOString(),
             duration: nextSchedule.duration,
             posterUrl: nextSchedule.mediaItem.posterUrl,
+            isIntermission: nextSchedule.isIntermission || false,
           }
         : null,
       streamUrl,
-      isIntermission: isOverrun,
+      isIntermission: currentSchedule.isIntermission || isOverrun,
     };
   }
 
@@ -665,8 +799,14 @@ export class SchedulerService {
       throw new Error(`MediaItem not found for program`);
     }
 
+    // During intermission / bathroom break, return the standby clip unless the user specifically seeks/resumes
+    if (state.isIntermission && customOffsetSeconds === undefined) {
+      return 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+    }
+
     const server = mediaItem.server;
-    const offset = customOffsetSeconds !== undefined ? Math.max(0, customOffsetSeconds) : state.currentProgram.elapsedSeconds;
+    const mediaOffset = state.currentProgram.mediaOffset || 0;
+    const offset = customOffsetSeconds !== undefined ? Math.max(0, customOffsetSeconds) : mediaOffset + state.currentProgram.elapsedSeconds;
 
     // Check if rawMetadata has demo direct stream
     if (mediaItem.rawMetadata) {

@@ -113,7 +113,9 @@ export class IptvService {
         progEle.ele('title', { lang: 'en' }).txt(prog.title);
       }
 
-      if (media.overview) {
+      if (prog.isIntermission) {
+        progEle.ele('desc', { lang: 'en' }).txt(`Bathroom break & snacks! ${media.title} will resume with Part 2 shortly.`);
+      } else if (media.overview) {
         progEle.ele('desc', { lang: 'en' }).txt(media.overview);
       }
 

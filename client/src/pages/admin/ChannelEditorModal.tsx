@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Sparkles, Check, Clock, Plus, Trash2 } from 'lucide-react';
+import { X, Sparkles, Check, Clock, Plus, Trash2, Coffee } from 'lucide-react';
 import { Channel } from '../../types';
 
 interface ChannelEditorModalProps {
@@ -31,6 +31,7 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
   const [maxYear, setMaxYear] = useState<string>(initialRules.maxYear ? String(initialRules.maxYear) : '');
   const [minRating, setMinRating] = useState<string>(initialRules.minRating ? String(initialRules.minRating) : '');
   const [sortBy, setSortBy] = useState<string>(initialRules.sortBy || (channelType === 'series' ? 'episode_asc' : 'random'));
+  const [enableIntermissions, setEnableIntermissions] = useState<boolean>(initialRules.enableIntermissions ?? true);
 
   // Time Blocks configuration
   const [timeBlocks, setTimeBlocks] = useState<any[]>(initialRules.timeBlocks || []);
@@ -102,6 +103,7 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
     const rulesObj: any = {
       type: channelType === 'series' ? 'episode' : channelType === 'movie' ? 'movie' : 'all',
       sortBy: playMode === 'sequential' ? 'episode_asc' : sortBy,
+      enableIntermissions,
     };
     if (seriesName) rulesObj.seriesNames = [seriesName];
     if (selectedGenres.length > 0) rulesObj.genres = selectedGenres;
@@ -304,6 +306,27 @@ export const ChannelEditorModal: React.FC<ChannelEditorModalProps> = ({
               </p>
             </div>
           )}
+
+          {/* Movie Bathroom Breaks / Intermissions */}
+          <div className="p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Coffee className="w-3.5 h-3.5 text-amber-400" />
+                  Bathroom Breaks & Intermissions
+                </span>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Automatically insert a 5-minute break at the 1-hour mark for movies over 75 minutes.
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={enableIntermissions}
+                onChange={e => setEnableIntermissions(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-500 cursor-pointer"
+              />
+            </div>
+          </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-400 mb-1.5">Description (Optional)</label>

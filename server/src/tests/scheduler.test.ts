@@ -208,4 +208,190 @@ describe('MagicTV Playout & IPTV Test Suite', () => {
       expect(streamUrl).toContain('StartTimeTicks=600000000');
     });
   });
+
+  describe('Consecutive Repeat Prevention', () => {
+    it('should never schedule the same movie back-to-back across multiple scheduling runs', async () => {
+      const { prisma } = await import('../db.js');
+      const { SchedulerService } = await import('../services/scheduler.service.js');
+
+      // Create a test server and 3 mock movies
+      const testServer = await prisma.mediaServer.create({
+        data: {
+          name: 'Test Movie Server',
+          type: 'plex',
+          url: 'http://localhost:32400',
+          token: 'test-token',
+        },
+      });
+
+      const m1 = await prisma.mediaItem.create({
+        data: {
+          serverId: testServer.id,
+          serverItemId: 'test-m1',
+          title: 'Movie Alpha',
+          type: 'movie',
+          duration: 3600,
+        },
+      });
+
+      const m2 = await prisma.mediaItem.create({
+        data: {
+          serverId: testServer.id,
+          serverItemId: 'test-m2',
+          title: 'Movie Beta',
+          type: 'movie',
+          duration: 3600,
+        },
+      });
+
+      const m3 = await prisma.mediaItem.create({
+        data: {
+          serverId: testServer.id,
+          serverItemId: 'test-m3',
+          title: 'Movie Gamma',
+          type: 'movie',
+          duration: 3600,
+        },
+      });
+
+      // Create a test channel with manual playlist
+      const testChannel = await prisma.channel.create({
+        data: {
+          number: 9999,
+          name: 'Repeat Prevention Test Channel',
+          type: 'movie',
+          mode: 'continuous',
+          manualItemIds: JSON.stringify([m1.id, m2.id, m3.id]),
+        },
+      });
+
+      try {
+        // Run initial schedule for 6 hours (adds ~6 movies)
+        await SchedulerService.ensureSchedule(testChannel.id, 6);
+
+        // Run second schedule simulating the 15-minute roll-forward
+        await SchedulerService.ensureSchedule(testChannel.id, 12);
+
+        // Fetch all scheduled programs in chronological order
+        const schedules = await prisma.programSchedule.findMany({
+          where: { channelId: testChannel.id },
+          orderBy: { startTime: 'asc' },
+        });
+
+        expect(schedules.length).toBeGreaterThan(2);
+
+        // Verify that NO two consecutive programs have the same mediaItemId
+        for (let i = 0; i < schedules.length - 1; i++) {
+          const current = schedules[i];
+          const next = schedules[i + 1];
+          // If neither or only one is an intermission, mediaItemId should not repeat
+          if (!current.isIntermission && !next.isIntermission) {
+            expect(current.mediaItemId).not.toBe(next.mediaItemId);
+          }
+        }
+      } finally {
+        // Clean up test channel, schedules, and media items
+        await prisma.programSchedule.deleteMany({ where: { channelId: testChannel.id } });
+        await prisma.channel.delete({ where: { id: testChannel.id } });
+        await prisma.mediaItem.deleteMany({ where: { serverId: testServer.id } });
+        await prisma.mediaServer.delete({ where: { id: testServer.id } });
+      }
+    });
+  });
+
+  describe('Movie Bathroom Breaks & Intermissions', () => {
+    it('should split movies longer than 75 minutes into Part 1, Intermission, and Part 2 at 1 hour mark', async () => {
+      const { prisma } = await import('../db.js');
+      const { SchedulerService } = await import('../services/scheduler.service.js');
+
+      const testServer = await prisma.mediaServer.create({
+        data: {
+          name: 'Intermission Test Server',
+          type: 'plex',
+          url: 'http://localhost:32400',
+          token: 'test-token',
+        },
+      });
+
+      // Long movie: 120 minutes (7200 seconds)
+      const longMovie = await prisma.mediaItem.create({
+        data: {
+          serverId: testServer.id,
+          serverItemId: 'long-movie-1',
+          title: 'The Great Odyssey',
+          type: 'movie',
+          duration: 7200, // 2 hours
+        },
+      });
+
+      // Short movie: 45 minutes (2700 seconds)
+      const shortMovie = await prisma.mediaItem.create({
+        data: {
+          serverId: testServer.id,
+          serverItemId: 'short-movie-1',
+          title: 'Short Adventure',
+          type: 'movie',
+          duration: 2700,
+        },
+      });
+
+      const testChannel = await prisma.channel.create({
+        data: {
+          number: 9998,
+          name: 'Bathroom Break Channel',
+          type: 'movie',
+          mode: 'continuous',
+          manualItemIds: JSON.stringify([longMovie.id, shortMovie.id]),
+          rules: JSON.stringify({
+            enableIntermissions: true,
+            intermissionThresholdMinutes: 75,
+            intermissionBreakMinutes: 5,
+            intermissionIntervalMinutes: 60,
+          }),
+        },
+      });
+
+      try {
+        await SchedulerService.ensureSchedule(testChannel.id, 4);
+
+        const schedules = await prisma.programSchedule.findMany({
+          where: { channelId: testChannel.id },
+          orderBy: { startTime: 'asc' },
+        });
+
+        // The first movie should be split into 3 segments:
+        // 1. Part 1: 3600s (60 min), mediaOffset: 0
+        // 2. Intermission: 300s (5 min), isIntermission: true
+        // 3. Part 2: 3600s (60 min), mediaOffset: 3600
+
+        const part1 = schedules[0];
+        expect(part1.title).toContain('Part 1');
+        expect(part1.duration).toBe(3600);
+        expect(part1.mediaOffset).toBe(0);
+        expect(part1.isIntermission).toBe(false);
+
+        const intermission = schedules[1];
+        expect(intermission.title).toContain('Intermission: Bathroom Break');
+        expect(intermission.duration).toBe(300); // 5 minutes
+        expect(intermission.isIntermission).toBe(true);
+
+        const part2 = schedules[2];
+        expect(part2.title).toContain('Part 2');
+        expect(part2.duration).toBe(3600);
+        expect(part2.mediaOffset).toBe(3600);
+        expect(part2.isIntermission).toBe(false);
+
+        // Next item is the short movie (45m), which should NOT be split
+        const shortItem = schedules[3];
+        expect(shortItem.title).toBe('Short Adventure');
+        expect(shortItem.duration).toBe(2700);
+        expect(shortItem.isIntermission).toBe(false);
+      } finally {
+        await prisma.programSchedule.deleteMany({ where: { channelId: testChannel.id } });
+        await prisma.channel.delete({ where: { id: testChannel.id } });
+        await prisma.mediaItem.deleteMany({ where: { serverId: testServer.id } });
+        await prisma.mediaServer.delete({ where: { id: testServer.id } });
+      }
+    });
+  });
 });

@@ -59,6 +59,8 @@ export interface ProgramInfo {
   elapsedSeconds: number;
   remainingSeconds: number;
   progressPercentage: number;
+  mediaOffset?: number;
+  isIntermission?: boolean;
 }
 
 export interface TimeBlock {
@@ -85,6 +87,10 @@ export interface ChannelRules {
   sortBy?: 'random' | 'year_asc' | 'year_desc' | 'title' | 'rating' | 'episode_asc';
   limit?: number;
   timeBlocks?: TimeBlock[];
+  enableIntermissions?: boolean;
+  intermissionThresholdMinutes?: number;
+  intermissionBreakMinutes?: number;
+  intermissionIntervalMinutes?: number;
 }
 
 export interface Channel {
@@ -128,5 +134,7 @@ export interface ScheduleProgram {
   startTime: string;
   endTime: string;
   duration: number;
+  mediaOffset?: number;
+  isIntermission?: boolean;
   mediaItem: MediaItem;
 }

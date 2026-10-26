@@ -113,7 +113,12 @@ export const ScheduleGrid: React.FC = () => {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <h4 className="text-sm font-bold text-white truncate">{item.title}</h4>
-                        {item.mediaItem?.year && (
+                        {item.isIntermission && (
+                          <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-bold tracking-wider uppercase">
+                            Intermission Break
+                          </span>
+                        )}
+                        {!item.isIntermission && item.mediaItem?.year && (
                           <span className="text-xs text-slate-400">({item.mediaItem.year})</span>
                         )}
                       </div>

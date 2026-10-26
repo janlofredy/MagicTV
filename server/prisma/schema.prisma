@@ -95,9 +95,11 @@ model ProgramSchedule {
   title       String
   startTime   DateTime
   endTime     DateTime
-  duration    Int        // in seconds
-  orderIndex  Int
-  createdAt   DateTime   @default(now())
+  duration       Int        // in seconds
+  orderIndex     Int
+  mediaOffset    Int        @default(0)
+  isIntermission Boolean    @default(false)
+  createdAt      DateTime   @default(now())
   channel     Channel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
   mediaItem   MediaItem  @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
 

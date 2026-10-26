@@ -22,6 +22,10 @@ export interface ChannelRules {
   sortBy?: 'random' | 'year_asc' | 'year_desc' | 'title' | 'rating' | 'episode_asc';
   limit?: number;
   timeBlocks?: TimeBlock[];
+  enableIntermissions?: boolean;
+  intermissionThresholdMinutes?: number; // e.g. 75
+  intermissionBreakMinutes?: number;     // e.g. 5
+  intermissionIntervalMinutes?: number;  // e.g. 60
 }
 
 export interface PlayoutState {
@@ -49,6 +53,8 @@ export interface PlayoutState {
     elapsedSeconds: number;
     remainingSeconds: number;
     progressPercentage: number;
+    mediaOffset?: number;
+    isIntermission?: boolean;
   } | null;
   nextProgram: {
     id: string;
@@ -61,6 +67,7 @@ export interface PlayoutState {
     endTime: string;
     duration: number;
     posterUrl?: string | null;
+    isIntermission?: boolean;
   } | null;
   streamUrl: string;
   isIntermission?: boolean;
