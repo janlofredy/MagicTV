@@ -60,8 +60,18 @@ export class AutoChannelService {
 
     // 1. Flagship Magic TV Channel: Mixed Block (Movies, Series Marathon & Overnight Off-Air)
     if (createMixedBlockChannels) {
-      const movieCount = await prisma.mediaItem.count({ where: { type: 'movie' } });
-      const episodeCount = await prisma.mediaItem.count({ where: { type: 'episode' } });
+      const movieCount = await prisma.mediaItem.count({
+        where: {
+          type: 'movie',
+          server: { type: { not: 'demo' } },
+        },
+      });
+      const episodeCount = await prisma.mediaItem.count({
+        where: {
+          type: 'episode',
+          server: { type: { not: 'demo' } },
+        },
+      });
 
       if (movieCount > 0 || episodeCount > 0) {
         const channelName = 'Magic TV';
@@ -168,6 +178,9 @@ export class AutoChannelService {
     // 3. Studio / Network Channels (studios/networks with at least 3 items)
     if (createStudioChannels) {
       const items = await prisma.mediaItem.findMany({
+        where: {
+          server: { type: { not: 'demo' } },
+        },
         select: { studios: true },
       });
 
@@ -222,6 +235,9 @@ export class AutoChannelService {
     // 3. Genre Channels (genres with at least 3 items)
     if (createGenreChannels) {
       const items = await prisma.mediaItem.findMany({
+        where: {
+          server: { type: { not: 'demo' } },
+        },
         select: { genres: true },
       });
 
@@ -281,6 +297,7 @@ export class AutoChannelService {
         where: {
           type: 'episode',
           seriesName: { not: null },
+          server: { type: { not: 'demo' } },
         },
         select: {
           seriesId: true,

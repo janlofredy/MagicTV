@@ -28,6 +28,11 @@ export class SchedulerService {
     }
 
     let allItems = await prisma.mediaItem.findMany({
+      where: {
+        server: {
+          type: { not: 'demo' },
+        },
+      },
       include: { server: true },
     });
 
