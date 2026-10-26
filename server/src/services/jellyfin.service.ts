@@ -275,6 +275,15 @@ export class JellyfinService {
     return `${cleanUrl}/Videos/${itemId}/stream?static=true&PlaySessionId=MagicTV-${Date.now()}&api_key=${token}`;
   }
 
+  static getInAppDirectPlayUrl(
+    baseUrl: string,
+    token: string,
+    itemId: string
+  ): string {
+    const cleanUrl = this.normalizeUrl(baseUrl);
+    return `${cleanUrl}/Videos/${itemId}/stream?static=true&PlaySessionId=MagicTV-InApp-${Date.now()}&api_key=${token}`;
+  }
+
   static getArtworkUrl(baseUrl: string, token: string, itemId: string, type: 'Primary' | 'Backdrop' = 'Primary'): string {
     const cleanUrl = this.normalizeUrl(baseUrl);
     return `${cleanUrl}/Items/${itemId}/Images/${type}?api_key=${token}`;

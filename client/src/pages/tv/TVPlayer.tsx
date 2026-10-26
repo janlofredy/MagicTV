@@ -50,6 +50,8 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
   const activeProgramIdRef = useRef<string | null>(null);
   const [playoutState, setPlayoutState] = useState<any>(null);
   const [channelInputDigits, setChannelInputDigits] = useState('');
+  const [isDirectPlay, setIsDirectPlay] = useState<boolean>(false);
+  const isDirectPlayRef = useRef<boolean>(false);
 
   // Guide Grid State
   const [guideData, setGuideData] = useState<GuideChannelData[]>([]);
@@ -206,39 +208,38 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     const video = videoRef.current;
     if (!video) return;
 
-    let targetOffset: number;
-    if (customOffset !== undefined) {
-      targetOffset = Math.max(0, customOffset);
-    } else {
-      // Live mode: fetch current playout offset to avoid desync
-      try {
-        const res = await fetch(`/api/channels/${channelNumber}/playout`);
-        if (res.ok) {
-          const state = await res.json();
-          setPlayoutState(state);
-          targetOffset = state?.currentProgram?.elapsedSeconds ?? 0;
-        } else {
-          targetOffset = playoutState?.currentProgram?.elapsedSeconds ?? 0;
-        }
-      } catch {
-        targetOffset = playoutState?.currentProgram?.elapsedSeconds ?? 0;
-      }
+    // Destroy any existing HLS instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
     }
-
-    loadedOffsetRef.current = targetOffset;
-    setVideoCurrentTime(0);
 
     const params = new URLSearchParams();
     if (customOffset !== undefined) {
-      params.set('offset', String(Math.floor(targetOffset)));
+      params.set('offset', String(Math.floor(customOffset)));
     }
     if (quality && quality !== 'auto') {
       params.set('quality', quality);
     }
     const queryString = params.toString() ? `?${params.toString()}` : '';
 
-    const hlsUrl = `/channels/${channelNumber}/stream.m3u8${queryString}`;
-    const directUrl = `/channels/${channelNumber}/stream${queryString}`;
+    // Fast In-App Watch API: single call returns playout metadata + directUrl + hlsUrl
+    let watchData: any = null;
+    try {
+      const res = await fetch(`/api/channels/${channelNumber}/watch${queryString}`);
+      if (res.ok) {
+        watchData = await res.json();
+        if (watchData?.playout) {
+          setPlayoutState(watchData.playout);
+        }
+      }
+    } catch (err) {
+      console.error('[TVPlayer] Failed to fetch in-app watch data:', err);
+    }
+
+    const targetOffset = customOffset !== undefined
+      ? Math.max(0, customOffset)
+      : (watchData?.offset ?? playoutState?.currentProgram?.elapsedSeconds ?? 0);
 
     let started = false;
     const startPlayback = () => {
@@ -247,49 +248,97 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
       video.play().catch(e => console.log('Autoplay prevented:', e));
     };
 
-    video.addEventListener('loadedmetadata', startPlayback, { once: true });
-    video.addEventListener('canplay', startPlayback, { once: true });
+    // Helper to start optimized HLS playback (used for transcode fallback or explicit quality limiting)
+    const startHls = (hlsUrl: string) => {
+      isDirectPlayRef.current = false;
+      setIsDirectPlay(false);
+      loadedOffsetRef.current = targetOffset;
+      setVideoCurrentTime(0);
 
-    if (Hls.isSupported()) {
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-      }
+      if (Hls.isSupported()) {
+        if (hlsRef.current) hlsRef.current.destroy();
 
-      const hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: false,
-        backBufferLength: 30,
-        maxBufferLength: 10,
-        maxMaxBufferLength: 30,
-        maxBufferSize: 30 * 1000 * 1000,
-        maxBufferHole: 0.5,
-        startFragPrefetch: true,
-      });
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30,
+          maxBufferLength: 6,
+          maxMaxBufferLength: 15,
+          maxBufferSize: 20 * 1000 * 1000,
+          maxBufferHole: 0.5,
+          startFragPrefetch: true,
+        });
 
-      hlsRef.current = hls;
-      hls.loadSource(hlsUrl);
-      hls.attachMedia(video);
+        hlsRef.current = hls;
+        hls.loadSource(hlsUrl);
+        hls.attachMedia(video);
 
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        startPlayback();
-      });
-
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          console.warn('HLS fatal error encountered, switching to direct stream:', data);
-          hls.destroy();
-          hlsRef.current = null;
-          video.src = directUrl;
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
           startPlayback();
-        }
-      });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = hlsUrl;
-      video.play().catch(() => {});
-    } else {
-      video.src = directUrl;
-      video.play().catch(() => {});
+        });
+
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) {
+            console.warn('[TVPlayer] HLS fatal error, falling back to direct URL:', data);
+            hls.destroy();
+            hlsRef.current = null;
+            if (watchData?.directUrl) {
+              video.src = watchData.directUrl;
+              startPlayback();
+            }
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = hlsUrl;
+        video.addEventListener('canplay', startPlayback, { once: true });
+        startPlayback();
+      } else {
+        video.src = watchData?.directUrl || `/channels/${channelNumber}/inapp?type=direct${queryString}`;
+        video.addEventListener('canplay', startPlayback, { once: true });
+        startPlayback();
+      }
+    };
+
+    // If a specific lower bitrate/quality was chosen by the user (e.g. 720p/480p), use transcoded HLS
+    if (quality && quality !== 'auto') {
+      const hlsUrl = watchData?.hlsUrl || `/channels/${channelNumber}/inapp?type=hls${queryString}`;
+      startHls(hlsUrl);
+      return;
     }
+
+    // High performance in-app watching: Direct Play priority!
+    // Direct Play streams the static file directly via HTTP 206 partial byte ranges (0 transcoding CPU, <150ms startup).
+    const directUrl = watchData?.directUrl || `/channels/${channelNumber}/inapp?type=direct${queryString}`;
+    const fallbackHlsUrl = watchData?.hlsUrl || `/channels/${channelNumber}/inapp?type=hls${queryString}`;
+
+    isDirectPlayRef.current = true;
+    setIsDirectPlay(true);
+    loadedOffsetRef.current = 0;
+    setVideoCurrentTime(targetOffset);
+
+    let seekApplied = false;
+    const handleLoadedMetadata = () => {
+      if (!seekApplied && targetOffset > 0) {
+        seekApplied = true;
+        try {
+          video.currentTime = targetOffset;
+        } catch {}
+      }
+      startPlayback();
+    };
+
+    const handleDirectPlayError = () => {
+      console.warn('[TVPlayer] Browser cannot direct-play container/codec; seamlessly switching to HLS transcode...');
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      startHls(fallbackHlsUrl);
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+    video.addEventListener('canplay', startPlayback, { once: true });
+    video.addEventListener('error', handleDirectPlayError, { once: true });
+
+    video.src = directUrl;
+    video.load();
   };
 
   // Handle Video Stream Loading on channel change
@@ -529,6 +578,16 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     const video = videoRef.current;
     if (!video) return;
     setIsLiveMode(false);
+
+    if (isDirectPlayRef.current) {
+      const maxDuration = curProg?.duration || video.duration || 0;
+      const targetTime = Math.max(0, Math.min(maxDuration, video.currentTime + seconds));
+      video.currentTime = targetTime;
+      setVideoCurrentTime(targetTime);
+      triggerOSD();
+      return;
+    }
+
     const targetTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
     
     // If seeking backwards close to 0 or target is out of current media range, reload from backend
@@ -547,6 +606,14 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     if (!video || !activeChannel) return;
     setIsLiveMode(false);
     console.log('[TVPlayer] Restarting current program from beginning (0s)');
+
+    if (isDirectPlayRef.current) {
+      video.currentTime = 0;
+      setVideoCurrentTime(0);
+      video.play().catch(() => {});
+      triggerOSD();
+      return;
+    }
     
     // Always reload stream at offset 0 so browser receives whole media from 0:00
     loadStream(activeChannel.number, 0, selectedQuality);
@@ -558,6 +625,16 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     if (!video || !playoutState?.currentProgram || !activeChannel) return;
     setIsLiveMode(true);
     console.log('[TVPlayer] Jumping to live broadcast position');
+
+    if (isDirectPlayRef.current) {
+      const liveOffset = playoutState?.currentProgram?.elapsedSeconds ?? 0;
+      video.currentTime = liveOffset;
+      setVideoCurrentTime(liveOffset);
+      video.play().catch(() => {});
+      triggerOSD();
+      return;
+    }
+
     // Reload live stream to sync with server playout
     loadStream(activeChannel.number, undefined, selectedQuality);
     triggerOSD();
@@ -595,6 +672,13 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
     const video = videoRef.current;
     if (!video || !activeChannel) return;
     setIsLiveMode(false);
+
+    if (isDirectPlayRef.current) {
+      video.currentTime = moviePos;
+      setVideoCurrentTime(moviePos);
+      triggerOSD();
+      return;
+    }
 
     // Convert movie position to HLS-relative time
     const hlsTime = moviePos - loadedOffsetRef.current;
@@ -900,7 +984,7 @@ export const TVPlayer: React.FC<TVPlayerProps> = ({ initialChannelNumber = 1, on
                       title="Select Streaming Quality"
                     >
                       <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>{selectedQuality === 'auto' ? 'Auto Quality' : selectedQuality}</span>
+                      <span>{selectedQuality === 'auto' ? (isDirectPlay ? 'Direct Play' : 'Auto Quality') : selectedQuality}</span>
                     </button>
 
                     {showQualityMenu && (

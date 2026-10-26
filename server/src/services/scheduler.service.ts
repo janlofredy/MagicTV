@@ -633,11 +633,12 @@ export class SchedulerService {
   }
 
   /**
-   * Resolves the target direct play stream URL with calculated offset for HTTP 302 redirect
+   * Resolves stream URL specifically for IPTV tuners (TiviMate, Jellyfin Live TV, Plex Live TV tuner, VLC, etc.)
+   * IPTV players need a stream arriving with playback pre-seeked to the current broadcast offset.
    */
-  static async resolveStreamRedirectUrl(
+  static async resolveIptvStreamUrl(
     channelNumber: number,
-    preferHls: boolean = true,
+    preferHls: boolean = false,
     timestamp: Date = new Date(),
     customOffsetSeconds?: number,
     maxBitrate?: number
@@ -653,7 +654,6 @@ export class SchedulerService {
     const state = await this.getCurrentPlayoutState(channel.id, timestamp);
 
     if (!state.currentProgram) {
-      // Return standby clip or intermission video
       return 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
     }
 
@@ -708,8 +708,189 @@ export class SchedulerService {
       );
     }
 
-    // Fallback
     return 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+  }
+
+  /**
+   * Resolves playout metadata and stream URLs specifically for the built-in In-App web player.
+   * Provides direct play URLs for near-instant playback (zero transcode overhead) with HLS fallback.
+   */
+  static async resolveInAppWatch(
+    channelNumber: number,
+    timestamp: Date = new Date(),
+    customOffsetSeconds?: number,
+    maxBitrate?: number
+  ): Promise<{
+    channel: Channel;
+    playout: PlayoutState;
+    offset: number;
+    duration: number;
+    directUrl: string;
+    hlsUrl: string;
+    isDirectPlayPreferred: boolean;
+  }> {
+    const channel = await prisma.channel.findUnique({
+      where: { number: channelNumber },
+    });
+
+    if (!channel) {
+      throw new Error(`Channel #${channelNumber} not found`);
+    }
+
+    const playout = await this.getCurrentPlayoutState(channel.id, timestamp);
+    const offset = customOffsetSeconds !== undefined 
+      ? Math.max(0, customOffsetSeconds) 
+      : (playout.currentProgram?.elapsedSeconds ?? 0);
+    const duration = playout.currentProgram?.duration ?? 0;
+
+    const fallbackUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+
+    if (!playout.currentProgram) {
+      return {
+        channel,
+        playout,
+        offset: 0,
+        duration: 596,
+        directUrl: fallbackUrl,
+        hlsUrl: fallbackUrl,
+        isDirectPlayPreferred: true,
+      };
+    }
+
+    const mediaItem = await prisma.mediaItem.findUnique({
+      where: { id: playout.currentProgram.mediaItemId },
+      include: { server: true },
+    });
+
+    if (!mediaItem) {
+      return {
+        channel,
+        playout,
+        offset,
+        duration,
+        directUrl: fallbackUrl,
+        hlsUrl: fallbackUrl,
+        isDirectPlayPreferred: true,
+      };
+    }
+
+    // Demo library check
+    if (mediaItem.rawMetadata) {
+      try {
+        const raw = JSON.parse(mediaItem.rawMetadata);
+        if (raw.streamUrl) {
+          return {
+            channel,
+            playout,
+            offset,
+            duration,
+            directUrl: raw.streamUrl,
+            hlsUrl: raw.streamUrl,
+            isDirectPlayPreferred: true,
+          };
+        }
+      } catch {}
+    }
+
+    const server = mediaItem.server;
+    let directUrl = fallbackUrl;
+    let hlsUrl = fallbackUrl;
+
+    if (server.type === 'plex') {
+      let partKey: string | undefined;
+      try {
+        if (mediaItem.rawMetadata) {
+          const raw = JSON.parse(mediaItem.rawMetadata);
+          partKey = raw.partKey;
+        }
+      } catch {}
+
+      directUrl = PlexService.getInAppDirectPlayUrl(
+        server.url,
+        server.token,
+        mediaItem.serverItemId,
+        partKey
+      );
+
+      hlsUrl = PlexService.getDirectStreamUrl(
+        server.url,
+        server.token,
+        mediaItem.serverItemId,
+        partKey,
+        offset,
+        true,
+        maxBitrate
+      );
+    } else if (server.type === 'jellyfin') {
+      directUrl = JellyfinService.getInAppDirectPlayUrl(
+        server.url,
+        server.token,
+        mediaItem.serverItemId
+      );
+
+      hlsUrl = JellyfinService.getDirectStreamUrl(
+        server.url,
+        server.token,
+        mediaItem.serverItemId,
+        offset,
+        true,
+        maxBitrate
+      );
+    }
+
+    const isDirectPlayPreferred = !maxBitrate;
+
+    return {
+      channel,
+      playout,
+      offset,
+      duration,
+      directUrl,
+      hlsUrl,
+      isDirectPlayPreferred,
+    };
+  }
+
+  /**
+   * Resolves HTTP 302 redirect URL for In-App video playback
+   */
+  static async resolveInAppStreamUrl(
+    channelNumber: number,
+    type: 'direct' | 'hls' = 'direct',
+    timestamp: Date = new Date(),
+    customOffsetSeconds?: number,
+    maxBitrate?: number
+  ): Promise<string> {
+    const watchData = await this.resolveInAppWatch(
+      channelNumber,
+      timestamp,
+      customOffsetSeconds,
+      maxBitrate
+    );
+
+    if (type === 'hls' || maxBitrate) {
+      return watchData.hlsUrl;
+    }
+    return watchData.directUrl;
+  }
+
+  /**
+   * General / legacy stream redirect resolver (defaults to IPTV tuner streaming)
+   */
+  static async resolveStreamRedirectUrl(
+    channelNumber: number,
+    preferHls: boolean = true,
+    timestamp: Date = new Date(),
+    customOffsetSeconds?: number,
+    maxBitrate?: number
+  ): Promise<string> {
+    return this.resolveIptvStreamUrl(
+      channelNumber,
+      preferHls,
+      timestamp,
+      customOffsetSeconds,
+      maxBitrate
+    );
   }
 
   private static shuffleArray<T>(arr: T[]): T[] {

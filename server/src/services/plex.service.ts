@@ -257,6 +257,19 @@ export class PlexService {
     return `${cleanUrl}/library/metadata/${serverItemId}?X-Plex-Token=${token}`;
   }
 
+  static getInAppDirectPlayUrl(
+    baseUrl: string,
+    token: string,
+    serverItemId: string,
+    partKey?: string
+  ): string {
+    const cleanUrl = this.normalizeUrl(baseUrl);
+    if (partKey) {
+      return `${cleanUrl}${partKey}?download=0&X-Plex-Token=${token}`;
+    }
+    return `${cleanUrl}/library/metadata/${serverItemId}?X-Plex-Token=${token}`;
+  }
+
   static getArtworkUrl(baseUrl: string, token: string, path?: string | null): string | null {
     if (!path) return null;
     const cleanUrl = this.normalizeUrl(baseUrl);

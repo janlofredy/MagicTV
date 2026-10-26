@@ -271,6 +271,52 @@ router.get('/:id/playout', async (req, res) => {
   }
 });
 
+// GET /api/channels/:id/watch - Dedicated In-App playback payload (playout + fast direct & HLS stream URLs)
+router.get('/:id/watch', async (req, res) => {
+  try {
+    let channelNumber: number;
+    const param = req.params.id;
+    const parsedNum = parseInt(param, 10);
+
+    if (!isNaN(parsedNum) && String(parsedNum) === param) {
+      channelNumber = parsedNum;
+    } else {
+      const ch = await prisma.channel.findUnique({ where: { id: param } });
+      if (!ch) return res.status(404).json({ error: 'Channel not found' });
+      channelNumber = ch.number;
+    }
+
+    let customOffset: number | undefined;
+    if (req.query.offset !== undefined) {
+      const parsed = parseFloat(String(req.query.offset));
+      if (!isNaN(parsed)) customOffset = Math.max(0, parsed);
+    }
+
+    let maxBitrate: number | undefined;
+    if (req.query.bitrate !== undefined) {
+      const parsed = parseInt(String(req.query.bitrate), 10);
+      if (!isNaN(parsed) && parsed > 0) maxBitrate = parsed;
+    } else if (req.query.quality) {
+      const q = String(req.query.quality).toLowerCase();
+      if (q === '1080p') maxBitrate = 4000000;
+      else if (q === '720p') maxBitrate = 2000000;
+      else if (q === '480p') maxBitrate = 1000000;
+      else if (q === '360p') maxBitrate = 600000;
+    }
+
+    const data = await SchedulerService.resolveInAppWatch(
+      channelNumber,
+      new Date(),
+      customOffset,
+      maxBitrate
+    );
+
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/channels/auto-generate - QuasiTV style automatic channel creation
 router.post('/auto-generate', async (req, res) => {
   try {

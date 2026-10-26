@@ -3,7 +3,58 @@ import { SchedulerService } from '../services/scheduler.service.js';
 
 const router = Router();
 
-// GET /channels/:channelNumber/stream or /channels/:channelNumber/stream.m3u8
+// GET /channels/:channelNumber/inapp or /channels/:channelNumber/watch - Dedicated In-App stream redirect
+router.get(['/:channelNumber/inapp', '/:channelNumber/watch'], async (req, res) => {
+  const channelNumber = parseInt(req.params.channelNumber, 10);
+  if (isNaN(channelNumber)) {
+    return res.status(400).send('Invalid channel number');
+  }
+
+  try {
+    const type = req.query.type === 'hls' ? 'hls' : 'direct';
+
+    let customOffset: number | undefined;
+    if (req.query.offset !== undefined) {
+      const parsedOffset = parseFloat(String(req.query.offset));
+      if (!isNaN(parsedOffset)) {
+        customOffset = Math.max(0, parsedOffset);
+      }
+    }
+
+    let maxBitrate: number | undefined;
+    if (req.query.bitrate !== undefined) {
+      const parsedBitrate = parseInt(String(req.query.bitrate), 10);
+      if (!isNaN(parsedBitrate) && parsedBitrate > 0) {
+        maxBitrate = parsedBitrate;
+      }
+    } else if (req.query.quality) {
+      const q = String(req.query.quality).toLowerCase();
+      if (q === '1080p') maxBitrate = 4000000;
+      else if (q === '720p') maxBitrate = 2000000;
+      else if (q === '480p') maxBitrate = 1000000;
+      else if (q === '360p') maxBitrate = 600000;
+    }
+
+    const redirectUrl = await SchedulerService.resolveInAppStreamUrl(
+      channelNumber,
+      type,
+      new Date(),
+      customOffset,
+      maxBitrate
+    );
+
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    res.redirect(302, redirectUrl);
+  } catch (err: any) {
+    console.error(`In-App stream redirect error for channel ${channelNumber}:`, err);
+    res.status(500).send(`In-App stream error: ${err.message}`);
+  }
+});
+
+// GET /channels/:channelNumber/stream or /channels/:channelNumber/stream.m3u8 (General & IPTV tuner fallback)
 router.get(['/:channelNumber/stream', '/:channelNumber/stream.m3u8'], async (req, res) => {
   const channelNumber = parseInt(req.params.channelNumber, 10);
   if (isNaN(channelNumber)) {

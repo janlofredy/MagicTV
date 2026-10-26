@@ -34,7 +34,7 @@ export class IptvService {
       const tvgChno = ch.number;
       const logo = ch.logoUrl || `${baseUrl}/api/channels/${ch.id}/logo`;
       const group = ch.groupTitle || 'Movies';
-      const streamUrl = `${baseUrl}/channels/${ch.number}/stream`;
+      const streamUrl = `${baseUrl}/iptv/channels/${ch.number}/stream`;
 
       lines.push(
         `#EXTINF:-1 tvg-id="${tvgId}" tvg-name="${tvgName}" tvg-chno="${tvgChno}" tvg-logo="${logo}" group-title="${group}",${ch.name}`
