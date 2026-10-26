@@ -105,6 +105,8 @@ router.get('/', async (req, res) => {
           elapsedSeconds: elapsed,
           remainingSeconds: Math.max(0, duration - elapsed),
           progressPercentage,
+          mediaOffset: current.mediaOffset || 0,
+          isIntermission: current.isIntermission || false,
         };
       }
 
