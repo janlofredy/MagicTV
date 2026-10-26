@@ -158,7 +158,7 @@ describe('MagicTV Playout & IPTV Test Suite', () => {
     });
   });
 
-  describe('Separated Watching Methods (In-App vs IPTV)', () => {
+  describe('Separated Watching Methods (In-App HLS vs IPTV Direct Stream)', () => {
     it('should generate dedicated IPTV stream URLs in M3U', () => {
       const baseUrl = 'http://localhost:8000';
       const chNumber = 1;
@@ -166,28 +166,46 @@ describe('MagicTV Playout & IPTV Test Suite', () => {
       expect(iptvUrl).toBe('http://localhost:8000/iptv/channels/1/stream');
     });
 
-    it('should generate zero-transcoding static Direct Play URLs for In-App playback on Plex', async () => {
+    it('should generate proper HLS stream for In-App playback on Plex', async () => {
       const { PlexService } = await import('../services/plex.service.js');
-      const directUrl = PlexService.getInAppDirectPlayUrl(
+      const hlsUrl = PlexService.getDirectStreamUrl(
         'http://plex:32400',
         'token123',
         'item1',
-        '/library/parts/999/0/file.mp4'
+        '/library/parts/999/0/file.mp4',
+        120,
+        true
       );
-      expect(directUrl).toBe('http://plex:32400/library/parts/999/0/file.mp4?download=0&X-Plex-Token=token123');
-      expect(directUrl).not.toContain('/transcode/universal');
+      expect(hlsUrl).toContain('/video/:/transcode/universal/start.m3u8');
+      expect(hlsUrl).toContain('offset=120');
+      expect(hlsUrl).toContain('X-Plex-Token=token123');
     });
 
-    it('should generate zero-transcoding static Direct Play URLs for In-App playback on Jellyfin', async () => {
+    it('should generate proper HLS stream for In-App playback on Jellyfin', async () => {
       const { JellyfinService } = await import('../services/jellyfin.service.js');
-      const directUrl = JellyfinService.getInAppDirectPlayUrl(
+      const hlsUrl = JellyfinService.getDirectStreamUrl(
         'http://jellyfin:8096',
         'token456',
-        'item2'
+        'item2',
+        60,
+        true
       );
-      expect(directUrl).toContain('/Videos/item2/stream?static=true');
-      expect(directUrl).toContain('PlaySessionId=MagicTV-InApp-');
-      expect(directUrl).not.toContain('master.m3u8');
+      expect(hlsUrl).toContain('/Videos/item2/master.m3u8');
+      expect(hlsUrl).toContain('StartTimeTicks=600000000');
+      expect(hlsUrl).toContain('api_key=token456');
+    });
+
+    it('should generate direct stream for IPTV playback on Jellyfin', async () => {
+      const { JellyfinService } = await import('../services/jellyfin.service.js');
+      const streamUrl = JellyfinService.getDirectStreamUrl(
+        'http://jellyfin:8096',
+        'token456',
+        'item2',
+        60,
+        false
+      );
+      expect(streamUrl).toContain('/Videos/item2/stream.mp4');
+      expect(streamUrl).toContain('StartTimeTicks=600000000');
     });
   });
 });
